@@ -1993,20 +1993,8 @@ async def use_llm_func_with_cache(
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
 
-        # TIMING: Start LLM call
-        llm_start_time = time.perf_counter()
         res: str = await use_llm_func(
             safe_user_prompt, system_prompt=safe_system_prompt, **kwargs
-        )
-        llm_end_time = time.perf_counter()
-        llm_duration = llm_end_time - llm_start_time
-        
-        # Log LLM call timing with workspace context if available
-        workspace = getattr(llm_response_cache, 'workspace', None) if llm_response_cache else None
-        logger.info(
-            f"[TIMING] [workspace={workspace}] LLM call completed: "
-            f"duration={llm_duration:.3f}s, cache_type={cache_type}, "
-            f"chunk_id={chunk_id[:20] if chunk_id else 'N/A'}"
         )
 
         res = remove_think_tags(res)
@@ -2039,20 +2027,9 @@ async def use_llm_func_with_cache(
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
 
-    # TIMING: Start LLM call (no cache)
-    llm_start_time = time.perf_counter()
     try:
         res = await use_llm_func(
             safe_user_prompt, system_prompt=safe_system_prompt, **kwargs
-        )
-        llm_end_time = time.perf_counter()
-        llm_duration = llm_end_time - llm_start_time
-        
-        # Log LLM call timing
-        workspace = getattr(llm_response_cache, 'workspace', None) if llm_response_cache else None
-        logger.info(
-            f"[TIMING] [workspace={workspace}] LLM call (no cache) completed: "
-            f"duration={llm_duration:.3f}s, cache_type={cache_type}"
         )
     except Exception as e:
         # Add [LLM func] prefix to error message

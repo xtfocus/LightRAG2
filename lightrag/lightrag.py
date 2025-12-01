@@ -2025,7 +2025,6 @@ class LightRAG:
                         # Initialize to prevent UnboundLocalError in error handling
                         first_stage_tasks = []
                         entity_relation_task = None
-                        doc_process_start_time = time.perf_counter()
                         try:
                             # Check for cancellation before starting document processing
                             async with pipeline_status_lock:
@@ -2035,12 +2034,6 @@ class LightRAG:
                             # Get file path from status document
                             file_path = getattr(
                                 status_doc, "file_path", "unknown_source"
-                            )
-                            
-                            # TIMING: Log document processing start
-                            logger.info(
-                                f"[TIMING] [workspace={effective_workspace}] Document processing started: "
-                                f"doc_id={doc_id}, file_path={file_path}"
                             )
 
                             async with pipeline_status_lock:
@@ -2160,28 +2153,16 @@ class LightRAG:
                             ]
                             entity_relation_task = None
 
-                            # TIMING: Stage 1 - Storage operations
-                            stage1_start = time.perf_counter()
+                            # Execute first stage tasks
                             await asyncio.gather(*first_stage_tasks)
-                            stage1_duration = time.perf_counter() - stage1_start
-                            logger.info(
-                                f"[TIMING] [workspace={effective_workspace}] Stage 1 (storage ops) completed: "
-                                f"duration={stage1_duration:.3f}s, doc_id={doc_id}"
-                            )
 
                             # Stage 2: Process entity relation graph (after text_chunks are saved)
-                            stage2_start = time.perf_counter()
                             entity_relation_task = asyncio.create_task(
                                 self._process_extract_entities(
                                     chunks, pipeline_status, pipeline_status_lock, storages=storages
                                 )
                             )
                             chunk_results = await entity_relation_task
-                            stage2_duration = time.perf_counter() - stage2_start
-                            logger.info(
-                                f"[TIMING] [workspace={effective_workspace}] Stage 2 (entity extraction) completed: "
-                                f"duration={stage2_duration:.3f}s, doc_id={doc_id}, chunks={len(chunks)}"
-                            )
                             file_extraction_stage_ok = True
 
                         except Exception as e:
@@ -2263,8 +2244,6 @@ class LightRAG:
                                             "User cancelled"
                                         )
 
-                                # TIMING: Stage 3 - Merge operations
-                                stage3_start = time.perf_counter()
                                 # Use chunk_results from entity_relation_task
                                 await merge_nodes_and_edges(
                                     chunk_results=chunk_results,  # result collected from entity_relation_task
@@ -2283,18 +2262,6 @@ class LightRAG:
                                     current_file_number=current_file_number,
                                     total_files=total_files,
                                     file_path=file_path,
-                                )
-                                stage3_duration = time.perf_counter() - stage3_start
-                                logger.info(
-                                    f"[TIMING] [workspace={effective_workspace}] Stage 3 (merge) completed: "
-                                    f"duration={stage3_duration:.3f}s, doc_id={doc_id}"
-                                )
-                                
-                                # TIMING: Total document processing time
-                                total_duration = time.perf_counter() - doc_process_start_time
-                                logger.info(
-                                    f"[TIMING] [workspace={effective_workspace}] Document processing completed: "
-                                    f"total_duration={total_duration:.3f}s, doc_id={doc_id}, file_path={file_path}"
                                 )
 
                                 # Record processing end time
