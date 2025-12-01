@@ -6,6 +6,7 @@ import { throttle } from '@/lib/utils'
 import { queryText, queryTextStream } from '@/api/lightrag'
 import { errorMessage } from '@/lib/utils'
 import { useSettingsStore } from '@/stores/settings'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { useDebounce } from '@/hooks/useDebounce'
 import QuerySettings from '@/components/retrieval/QuerySettings'
 import { ChatMessage, MessageWithError } from '@/components/retrieval/ChatMessage'
@@ -105,7 +106,9 @@ export default function RetrievalTesting() {
   const { t } = useTranslation()
   // Get current tab to determine if this tab is active (for performance optimization)
   const currentTab = useSettingsStore.use.currentTab()
+  const currentWorkspace = useWorkspaceStore.use.currentWorkspace()
   const isRetrievalTabActive = currentTab === 'retrieval'
+  const setRetrievalHistory = useSettingsStore.use.setRetrievalHistory()
 
   const [messages, setMessages] = useState<MessageWithError[]>(() => {
     try {
@@ -141,6 +144,17 @@ export default function RetrievalTesting() {
   const [isLoading, setIsLoading] = useState(false)
   const [inputError, setInputError] = useState('') // Error message for input
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
+  
+  // Clear conversation history when workspace changes
+  const prevWorkspaceRef = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    // Only clear if workspace actually changed (not on initial mount)
+    if (prevWorkspaceRef.current !== undefined && prevWorkspaceRef.current !== currentWorkspace) {
+      setMessages([])
+      setRetrievalHistory([])
+    }
+    prevWorkspaceRef.current = currentWorkspace
+  }, [currentWorkspace, setRetrievalHistory])
 
   // Smart switching logic: use Input for single line, Textarea for multi-line
   const hasMultipleLines = inputValue.includes('\n')

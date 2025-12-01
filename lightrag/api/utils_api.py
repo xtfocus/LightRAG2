@@ -12,7 +12,7 @@ from lightrag import __version__ as core_version
 from lightrag.constants import (
     DEFAULT_FORCE_LLM_SUMMARY_ON_MERGE,
 )
-from fastapi import HTTPException, Security, Request, status
+from fastapi import HTTPException, Header, Security, Request, status
 from fastapi.security import APIKeyHeader, OAuth2PasswordBearer
 from starlette.status import HTTP_403_FORBIDDEN
 from .auth import auth_handler
@@ -164,6 +164,73 @@ def get_combined_auth_dependency(api_key: Optional[str] = None):
         )
 
     return combined_dependency
+
+
+def get_validated_workspace_dependency(rag: "LightRAG"):
+    """
+    Create a FastAPI dependency that validates workspace existence.
+    
+    This dependency:
+    1. Extracts workspace from LIGHTRAG-WORKSPACE header
+    2. Falls back to default workspace if not provided
+    3. Validates that the workspace exists
+    4. Raises HTTPException(404) if workspace doesn't exist
+    5. Returns the validated workspace string
+    
+    Args:
+        rag: LightRAG instance for workspace validation
+        
+    Returns:
+        Callable: A dependency function that returns validated workspace
+        
+    Usage:
+        @router.post("/endpoint")
+        async def my_endpoint(
+            workspace: str = Depends(get_validated_workspace_dependency(rag))
+        ):
+            # workspace is guaranteed to exist here
+            ...
+    """
+    async def validated_workspace_dependency(
+        lightrag_workspace: Optional[str] = Header(None, alias="LIGHTRAG-WORKSPACE")
+    ) -> str:
+        """
+        Validate workspace exists before allowing operation.
+        
+        Args:
+            lightrag_workspace: Workspace from LIGHTRAG-WORKSPACE header
+            
+        Returns:
+            Validated workspace identifier
+            
+        Raises:
+            HTTPException: 404 if workspace doesn't exist
+        """
+        # Determine effective workspace
+        effective_workspace = None
+        if lightrag_workspace:
+            effective_workspace = lightrag_workspace.strip() or None
+        
+        if not effective_workspace:
+            effective_workspace = rag.workspace
+        
+        if not effective_workspace:
+            raise HTTPException(
+                status_code=400,
+                detail="Workspace must be specified via LIGHTRAG-WORKSPACE header or default workspace"
+            )
+        
+        # Validate workspace exists
+        if not await rag.workspace_exists(effective_workspace):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Workspace '{effective_workspace}' does not exist. "
+                       "Please create it first using POST /workspaces/"
+            )
+        
+        return effective_workspace
+    
+    return validated_workspace_dependency
 
 
 def display_splash_screen(args: argparse.Namespace) -> None:

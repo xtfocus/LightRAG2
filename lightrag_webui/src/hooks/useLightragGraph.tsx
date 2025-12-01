@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { queryGraphs } from '@/api/lightrag'
 import { useBackendState } from '@/stores/state'
 import { useSettingsStore } from '@/stores/settings'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 import seedrandom from 'seedrandom'
 import { resolveNodeColor, DEFAULT_NODE_COLOR } from '@/utils/graphColor'
@@ -261,6 +262,7 @@ const createSigmaGraph = (rawGraph: RawGraph | null) => {
 const useLightrangeGraph = () => {
   const { t } = useTranslation()
   const queryLabel = useSettingsStore.use.queryLabel()
+  const currentWorkspace = useWorkspaceStore.use.currentWorkspace()
   const rawGraph = useGraphStore.use.rawGraph()
   const sigmaGraph = useGraphStore.use.sigmaGraph()
   const maxQueryDepth = useSettingsStore.use.graphQueryMaxDepth()
@@ -294,8 +296,13 @@ const useLightrangeGraph = () => {
   // Track if a fetch is in progress to prevent multiple simultaneous fetches
   const fetchInProgressRef = useRef(false)
 
-  // Reset graph when query label is cleared
+  // Track previous workspace to detect changes
+  const prevWorkspaceRef = useRef<string | null | undefined>(undefined)
+  
+  // Reset graph when query label is cleared or workspace changes
   useEffect(() => {
+    const workspaceChanged = prevWorkspaceRef.current !== undefined && prevWorkspaceRef.current !== currentWorkspace
+    
     if (!queryLabel && (rawGraph !== null || sigmaGraph !== null)) {
       const state = useGraphStore.getState()
       state.reset()
@@ -304,7 +311,23 @@ const useLightrangeGraph = () => {
       dataLoadedRef.current = false
       initialLoadRef.current = false
     }
-  }, [queryLabel, rawGraph, sigmaGraph])
+    
+    // Reset graph when workspace changes
+    if (workspaceChanged) {
+      const state = useGraphStore.getState()
+      state.reset()
+      state.setGraphDataFetchAttempted(false)
+      state.setLabelsFetchAttempted(false)
+      dataLoadedRef.current = false
+      initialLoadRef.current = false
+      // Reset query label when workspace changes to force fresh data
+      if (queryLabel) {
+        useSettingsStore.getState().setQueryLabel('')
+      }
+    }
+    
+    prevWorkspaceRef.current = currentWorkspace
+  }, [queryLabel, rawGraph, sigmaGraph, currentWorkspace])
 
   // Graph data fetching logic
   useEffect(() => {
@@ -455,7 +478,7 @@ const useLightrangeGraph = () => {
         state.setLastSuccessfulQueryLabel('') // Clear last successful query label on error
       })
     }
-  }, [queryLabel, maxQueryDepth, maxNodes, isFetching, t, graphDataVersion])
+  }, [queryLabel, maxQueryDepth, maxNodes, isFetching, t, graphDataVersion, currentWorkspace])
 
   // Handle node expansion
   useEffect(() => {

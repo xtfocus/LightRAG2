@@ -3,6 +3,7 @@ import { backendBaseUrl, popularLabelsDefaultLimit, searchLabelsDefaultLimit } f
 import { errorMessage } from '@/lib/utils'
 import { useSettingsStore } from '@/stores/settings'
 import { navigationService } from '@/services/navigation'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 // Types
 export type LightragNodeType = {
@@ -285,10 +286,13 @@ const axiosInstance = axios.create({
   }
 })
 
-// Interceptor: add api key and check authentication
+// Interceptor: add api key, workspace, and check authentication
 axiosInstance.interceptors.request.use((config) => {
   const apiKey = useSettingsStore.getState().apiKey
   const token = localStorage.getItem('LIGHTRAG-API-TOKEN');
+  
+  // Get current workspace from workspace store
+  const workspace = useWorkspaceStore.getState().currentWorkspace
 
   // Always include token if it exists, regardless of path
   if (token) {
@@ -296,6 +300,9 @@ axiosInstance.interceptors.request.use((config) => {
   }
   if (apiKey) {
     config.headers['X-API-Key'] = apiKey
+  }
+  if (workspace) {
+    config.headers['LIGHTRAG-WORKSPACE'] = workspace
   }
   return config
 })
@@ -397,6 +404,7 @@ export const queryTextStream = async (
 ) => {
   const apiKey = useSettingsStore.getState().apiKey;
   const token = localStorage.getItem('LIGHTRAG-API-TOKEN');
+  const workspace = useWorkspaceStore.getState().currentWorkspace;
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
     'Accept': 'application/x-ndjson',
@@ -406,6 +414,9 @@ export const queryTextStream = async (
   }
   if (apiKey) {
     headers['X-API-Key'] = apiKey;
+  }
+  if (workspace) {
+    headers['LIGHTRAG-WORKSPACE'] = workspace;
   }
 
   try {
@@ -813,5 +824,137 @@ export const getDocumentsPaginated = async (request: DocumentsRequest): Promise<
  */
 export const getDocumentStatusCounts = async (): Promise<StatusCountsResponse> => {
   const response = await axiosInstance.get('/documents/status_counts')
+  return response.data
+}
+
+// Workspace Management API Methods
+
+export type WorkspaceInfo = {
+  workspace: string
+  document_count: number
+  entity_count: number
+  relation_count: number
+  chunk_count: number
+  pipeline_busy: boolean
+  pipeline_status: Record<string, any>
+}
+
+export type WorkspaceDocument = {
+  id: string
+  content_preview: string
+  status: string
+  file_path: string
+  content_summary: string
+  content_length: number
+  chunks_count: number
+  created_at: string
+  updated_at: string
+  track_id: string
+}
+
+export type WorkspaceDocumentList = {
+  workspace: string
+  documents: WorkspaceDocument[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export type WorkspaceDocumentDetail = {
+  id: string
+  workspace: string
+  content: string
+  file_path: string
+  status: string
+  content_summary: string
+  content_length: number
+  chunks_count: number
+  chunks_list: string[]
+  created_at: string
+  updated_at: string
+  track_id: string
+  error_msg: string
+}
+
+/**
+ * List all available workspaces
+ * @returns Promise with list of workspace identifiers
+ */
+export const listWorkspaces = async (): Promise<string[]> => {
+  const response = await axiosInstance.get('/workspaces/')
+  return response.data
+}
+
+/**
+ * Get information about a specific workspace
+ * @param workspace Workspace identifier
+ * @returns Promise with workspace information
+ */
+export const getWorkspaceInfo = async (workspace: string): Promise<WorkspaceInfo> => {
+  const response = await axiosInstance.get(`/workspaces/${encodeURIComponent(workspace)}`)
+  return response.data
+}
+
+/**
+ * List documents in a workspace with pagination
+ * @param workspace Workspace identifier
+ * @param status Optional status filter
+ * @param page Page number (1-indexed)
+ * @param pageSize Number of documents per page
+ * @returns Promise with paginated document list
+ */
+export const listWorkspaceDocuments = async (
+  workspace: string,
+  status?: string,
+  page: number = 1,
+  pageSize: number = 50
+): Promise<WorkspaceDocumentList> => {
+  const params = new URLSearchParams({
+    page: page.toString(),
+    page_size: pageSize.toString()
+  })
+  if (status) {
+    params.append('status', status)
+  }
+  const response = await axiosInstance.get(`/workspaces/${encodeURIComponent(workspace)}/documents?${params.toString()}`)
+  return response.data
+}
+
+/**
+ * Get a specific document by ID from a workspace
+ * @param workspace Workspace identifier
+ * @param docId Document identifier
+ * @returns Promise with complete document information
+ */
+export const getWorkspaceDocument = async (
+  workspace: string,
+  docId: string
+): Promise<WorkspaceDocumentDetail> => {
+  const response = await axiosInstance.get(
+    `/workspaces/${encodeURIComponent(workspace)}/documents/${encodeURIComponent(docId)}`
+  )
+  return response.data
+}
+
+/**
+ * Delete an entire workspace and all its data
+ * WARNING: This operation is irreversible
+ * @param workspace Workspace identifier to delete
+ * @param confirm Confirmation flag (must be true)
+ * @returns Promise with deletion results
+ */
+export const deleteWorkspace = async (
+  workspace: string,
+  confirm: boolean = false
+): Promise<{
+  workspace: string
+  deleted: boolean
+  errors: string[]
+  details: Record<string, any>
+  message?: string
+}> => {
+  const response = await axiosInstance.delete(`/workspaces/${encodeURIComponent(workspace)}`, {
+    data: { confirm }
+  })
   return response.data
 }

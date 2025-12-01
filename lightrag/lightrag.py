@@ -154,8 +154,8 @@ class LightRAG:
     # Workspace
     # ---
 
-    workspace: str = field(default_factory=lambda: os.getenv("WORKSPACE", ""))
-    """Workspace for data isolation. Defaults to empty string if WORKSPACE environment variable is not set."""
+    workspace: str | None = field(default_factory=lambda: os.getenv("WORKSPACE", "") or None)
+    """Default workspace for data isolation. If None, workspace must be specified per operation."""
 
     # Logging (Deprecated, use setup_logger in utils.py instead)
     # ---
@@ -440,6 +440,28 @@ class LightRAG:
     """Configuration for Ollama server information."""
 
     _storages_status: StoragesStatus = field(default=StoragesStatus.NOT_CREATED)
+    
+    # Multi-workspace support
+    _storage_registry: Dict[str, Dict[str, Any]] = field(
+        default_factory=dict,
+        init=False,
+        repr=False
+    )
+    """Registry of storage instances per workspace."""
+    
+    _default_storages: Dict[str, Any] = field(
+        default_factory=dict,
+        init=False,
+        repr=False
+    )
+    """Default storage instances (for backward compatibility when workspace is set)."""
+    
+    _global_config: Dict[str, Any] = field(
+        default_factory=dict,
+        init=False,
+        repr=False
+    )
+    """Global configuration dictionary cached for workspace storage creation."""
 
     def __post_init__(self):
         from lightrag.kg.shared_storage import (
@@ -520,6 +542,7 @@ class LightRAG:
 
         # Fix global_config now
         global_config = asdict(self)
+        self._global_config = global_config  # Cache for workspace storage creation
 
         _print_config = ",\n  ".join([f"{k} = {v}" for k, v in global_config.items()])
         logger.debug(f"LightRAG init with param:\n  {_print_config}\n")
@@ -564,136 +587,243 @@ class LightRAG:
         # Initialize document status storage
         self.doc_status_storage_cls = self._get_storage_class(self.doc_status_storage)
 
-        self.llm_response_cache: BaseKVStorage = self.key_string_value_json_storage_cls(  # type: ignore
-            namespace=NameSpace.KV_STORE_LLM_RESPONSE_CACHE,
-            workspace=self.workspace,
-            global_config=global_config,
-            embedding_func=self.embedding_func,
-        )
-
-        self.text_chunks: BaseKVStorage = self.key_string_value_json_storage_cls(  # type: ignore
-            namespace=NameSpace.KV_STORE_TEXT_CHUNKS,
-            workspace=self.workspace,
-            embedding_func=self.embedding_func,
-        )
-
-        self.full_docs: BaseKVStorage = self.key_string_value_json_storage_cls(  # type: ignore
-            namespace=NameSpace.KV_STORE_FULL_DOCS,
-            workspace=self.workspace,
-            embedding_func=self.embedding_func,
-        )
-
-        self.full_entities: BaseKVStorage = self.key_string_value_json_storage_cls(  # type: ignore
-            namespace=NameSpace.KV_STORE_FULL_ENTITIES,
-            workspace=self.workspace,
-            embedding_func=self.embedding_func,
-        )
-
-        self.full_relations: BaseKVStorage = self.key_string_value_json_storage_cls(  # type: ignore
-            namespace=NameSpace.KV_STORE_FULL_RELATIONS,
-            workspace=self.workspace,
-            embedding_func=self.embedding_func,
-        )
-
-        self.entity_chunks: BaseKVStorage = self.key_string_value_json_storage_cls(  # type: ignore
-            namespace=NameSpace.KV_STORE_ENTITY_CHUNKS,
-            workspace=self.workspace,
-            embedding_func=self.embedding_func,
-        )
-
-        self.relation_chunks: BaseKVStorage = self.key_string_value_json_storage_cls(  # type: ignore
-            namespace=NameSpace.KV_STORE_RELATION_CHUNKS,
-            workspace=self.workspace,
-            embedding_func=self.embedding_func,
-        )
-
-        self.chunk_entity_relation_graph: BaseGraphStorage = self.graph_storage_cls(  # type: ignore
-            namespace=NameSpace.GRAPH_STORE_CHUNK_ENTITY_RELATION,
-            workspace=self.workspace,
-            embedding_func=self.embedding_func,
-        )
-
-        self.entities_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
-            namespace=NameSpace.VECTOR_STORE_ENTITIES,
-            workspace=self.workspace,
-            embedding_func=self.embedding_func,
-            meta_fields={"entity_name", "source_id", "content", "file_path"},
-        )
-        self.relationships_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
-            namespace=NameSpace.VECTOR_STORE_RELATIONSHIPS,
-            workspace=self.workspace,
-            embedding_func=self.embedding_func,
-            meta_fields={"src_id", "tgt_id", "source_id", "content", "file_path"},
-        )
-        self.chunks_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
-            namespace=NameSpace.VECTOR_STORE_CHUNKS,
-            workspace=self.workspace,
-            embedding_func=self.embedding_func,
-            meta_fields={"full_doc_id", "content", "file_path"},
-        )
-
-        # Initialize document status storage
-        self.doc_status: DocStatusStorage = self.doc_status_storage_cls(
-            namespace=NameSpace.DOC_STATUS,
-            workspace=self.workspace,
-            global_config=global_config,
-            embedding_func=None,
-        )
-
-        # Directly use llm_response_cache, don't create a new object
-        hashing_kv = self.llm_response_cache
+        # If workspace is provided, create default storages for backward compatibility
+        if self.workspace:
+            self._default_storages = self._create_storages_for_workspace(
+                self.workspace, global_config
+            )
+            # Set as instance attributes for backward compatibility
+            self.llm_response_cache = self._default_storages["llm_response_cache"]
+            self.text_chunks = self._default_storages["text_chunks"]
+            self.full_docs = self._default_storages["full_docs"]
+            self.full_entities = self._default_storages["full_entities"]
+            self.full_relations = self._default_storages["full_relations"]
+            self.entity_chunks = self._default_storages["entity_chunks"]
+            self.relation_chunks = self._default_storages["relation_chunks"]
+            self.chunk_entity_relation_graph = self._default_storages["chunk_entity_relation_graph"]
+            self.entities_vdb = self._default_storages["entities_vdb"]
+            self.relationships_vdb = self._default_storages["relationships_vdb"]
+            self.chunks_vdb = self._default_storages["chunks_vdb"]
+            self.doc_status = self._default_storages["doc_status"]
+            hashing_kv = self.llm_response_cache
+        else:
+            # No default workspace - storages will be created lazily per workspace
+            # Create placeholder attributes to avoid AttributeError
+            self.llm_response_cache = None  # type: ignore
+            self.text_chunks = None  # type: ignore
+            self.full_docs = None  # type: ignore
+            self.full_entities = None  # type: ignore
+            self.full_relations = None  # type: ignore
+            self.entity_chunks = None  # type: ignore
+            self.relation_chunks = None  # type: ignore
+            self.chunk_entity_relation_graph = None  # type: ignore
+            self.entities_vdb = None  # type: ignore
+            self.relationships_vdb = None  # type: ignore
+            self.chunks_vdb = None  # type: ignore
+            self.doc_status = None  # type: ignore
+            hashing_kv = None  # type: ignore
 
         # Get timeout from LLM model kwargs for dynamic timeout calculation
-        self.llm_model_func = priority_limit_async_func_call(
-            self.llm_model_max_async,
-            llm_timeout=self.default_llm_timeout,
-            queue_name="LLM func",
-        )(
-            partial(
-                self.llm_model_func,  # type: ignore
-                hashing_kv=hashing_kv,
-                **self.llm_model_kwargs,
+        # Only set hashing_kv if we have a default workspace
+        if hashing_kv is not None:
+            self.llm_model_func = priority_limit_async_func_call(
+                self.llm_model_max_async,
+                llm_timeout=self.default_llm_timeout,
+                queue_name="LLM func",
+            )(
+                partial(
+                    self.llm_model_func,  # type: ignore
+                    hashing_kv=hashing_kv,
+                    **self.llm_model_kwargs,
+                )
             )
-        )
+        else:
+            # For multi-workspace mode, we'll create llm_model_func per workspace
+            # Store the base function for later use
+            self._base_llm_model_func = self.llm_model_func
+            self.llm_model_func = None  # type: ignore
 
         self._storages_status = StoragesStatus.CREATED
 
-    async def initialize_storages(self):
-        """Storage initialization must be called one by one to prevent deadlock"""
+    def _create_storages_for_workspace(
+        self, workspace: str, global_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Create storage instances for a specific workspace.
+        
+        Args:
+            workspace: Workspace identifier
+            global_config: Global configuration dictionary
+            
+        Returns:
+            Dictionary containing all storage instances for the workspace
+        """
+        if workspace in self._storage_registry:
+            return self._storage_registry[workspace]
+        
+        # Create storage instances for this workspace
+        storages = {
+            "llm_response_cache": self.key_string_value_json_storage_cls(  # type: ignore
+            namespace=NameSpace.KV_STORE_LLM_RESPONSE_CACHE,
+                workspace=workspace,
+            global_config=global_config,
+            embedding_func=self.embedding_func,
+            ),
+            "text_chunks": self.key_string_value_json_storage_cls(  # type: ignore
+            namespace=NameSpace.KV_STORE_TEXT_CHUNKS,
+                workspace=workspace,
+            embedding_func=self.embedding_func,
+            ),
+            "full_docs": self.key_string_value_json_storage_cls(  # type: ignore
+            namespace=NameSpace.KV_STORE_FULL_DOCS,
+                workspace=workspace,
+            embedding_func=self.embedding_func,
+            ),
+            "full_entities": self.key_string_value_json_storage_cls(  # type: ignore
+            namespace=NameSpace.KV_STORE_FULL_ENTITIES,
+                workspace=workspace,
+            embedding_func=self.embedding_func,
+            ),
+            "full_relations": self.key_string_value_json_storage_cls(  # type: ignore
+            namespace=NameSpace.KV_STORE_FULL_RELATIONS,
+                workspace=workspace,
+            embedding_func=self.embedding_func,
+            ),
+            "entity_chunks": self.key_string_value_json_storage_cls(  # type: ignore
+            namespace=NameSpace.KV_STORE_ENTITY_CHUNKS,
+                workspace=workspace,
+            embedding_func=self.embedding_func,
+            ),
+            "relation_chunks": self.key_string_value_json_storage_cls(  # type: ignore
+            namespace=NameSpace.KV_STORE_RELATION_CHUNKS,
+                workspace=workspace,
+            embedding_func=self.embedding_func,
+            ),
+            "chunk_entity_relation_graph": self.graph_storage_cls(  # type: ignore
+            namespace=NameSpace.GRAPH_STORE_CHUNK_ENTITY_RELATION,
+                workspace=workspace,
+            embedding_func=self.embedding_func,
+            ),
+            "entities_vdb": self.vector_db_storage_cls(  # type: ignore
+            namespace=NameSpace.VECTOR_STORE_ENTITIES,
+                workspace=workspace,
+            embedding_func=self.embedding_func,
+            meta_fields={"entity_name", "source_id", "content", "file_path"},
+            ),
+            "relationships_vdb": self.vector_db_storage_cls(  # type: ignore
+            namespace=NameSpace.VECTOR_STORE_RELATIONSHIPS,
+                workspace=workspace,
+            embedding_func=self.embedding_func,
+            meta_fields={"src_id", "tgt_id", "source_id", "content", "file_path"},
+            ),
+            "chunks_vdb": self.vector_db_storage_cls(  # type: ignore
+            namespace=NameSpace.VECTOR_STORE_CHUNKS,
+                workspace=workspace,
+            embedding_func=self.embedding_func,
+            meta_fields={"full_doc_id", "content", "file_path"},
+            ),
+            "doc_status": self.doc_status_storage_cls(
+            namespace=NameSpace.DOC_STATUS,
+                workspace=workspace,
+            global_config=global_config,
+            embedding_func=None,
+            ),
+        }
+        
+        # Cache in registry
+        self._storage_registry[workspace] = storages
+        
+        return storages
+
+    def _get_storages_for_workspace(
+        self, workspace: str, require_existing: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Get or create storage instances for a specific workspace.
+        
+        Args:
+            workspace: Workspace identifier
+            require_existing: If True, only returns storages if workspace exists in registry.
+                            If False, creates storages if they don't exist (default behavior).
+                            
+        Returns:
+            Dictionary containing all storage instances for the workspace
+            
+        Note:
+            When require_existing=True, this method will only return storages if the workspace
+            has been explicitly created. It will not auto-create the workspace.
+        """
+        if not workspace:
+            raise ValueError("Workspace must be specified")
+        
+        # If require_existing, check if workspace is in registry
+        if require_existing and workspace not in self._storage_registry:
+            raise ValueError(
+                f"Workspace '{workspace}' does not exist. "
+                "Please create it first using POST /workspaces/"
+            )
+        
+        # Use cached global_config
+        return self._create_storages_for_workspace(workspace, self._global_config)
+
+    async def initialize_storages(
+        self, workspace: str | None = None, require_existing: bool = False
+    ):
+        """
+        Storage initialization must be called one by one to prevent deadlock.
+        
+        Args:
+            workspace: Optional workspace identifier. If None, uses default workspace.
+            require_existing: If True, raises ValueError if workspace doesn't exist.
+                            If False, automatically creates workspace if it doesn't exist.
+        """
+        effective_workspace = workspace or self.workspace
+        
+        # Check if workspace must exist before initializing
+        if require_existing and effective_workspace:
+            effective_workspace = await self._validate_workspace_exists(effective_workspace)
+        
         if self._storages_status == StoragesStatus.CREATED:
             # Set the first initialized workspace will set the default workspace
             # Allows namespace operation without specifying workspace for backward compatibility
             default_workspace = get_default_workspace()
-            if default_workspace is None:
-                set_default_workspace(self.workspace)
-            elif default_workspace != self.workspace:
+            if default_workspace is None and effective_workspace:
+                set_default_workspace(effective_workspace)
+            elif default_workspace and effective_workspace and default_workspace != effective_workspace:
                 logger.info(
-                    f"Creating LightRAG instance with workspace='{self.workspace}' "
+                    f"Creating LightRAG instance with workspace='{effective_workspace}' "
                     f"while default workspace is set to '{default_workspace}'"
                 )
 
             # Auto-initialize pipeline_status for this workspace
-            from lightrag.kg.shared_storage import initialize_pipeline_status
+            if effective_workspace:
+                from lightrag.kg.shared_storage import initialize_pipeline_status
+                await initialize_pipeline_status(workspace=effective_workspace)
 
-            await initialize_pipeline_status(workspace=self.workspace)
-
-            for storage in (
-                self.full_docs,
-                self.text_chunks,
-                self.full_entities,
-                self.full_relations,
-                self.entity_chunks,
-                self.relation_chunks,
-                self.entities_vdb,
-                self.relationships_vdb,
-                self.chunks_vdb,
-                self.chunk_entity_relation_graph,
-                self.llm_response_cache,
-                self.doc_status,
-            ):
-                if storage:
-                    # logger.debug(f"Initializing storage: {storage}")
-                    await storage.initialize()
+            # Initialize storages for the workspace
+            if effective_workspace:
+                storages = self._get_storages_for_workspace(effective_workspace)
+                for storage_name, storage in storages.items():
+                    if storage:
+                        await storage.initialize()
+            elif self.workspace:
+                # Backward compatibility: initialize default storages
+                for storage in (
+                    self.full_docs,
+                    self.text_chunks,
+                    self.full_entities,
+                    self.full_relations,
+                    self.entity_chunks,
+                    self.relation_chunks,
+                    self.entities_vdb,
+                    self.relationships_vdb,
+                    self.chunks_vdb,
+                    self.chunk_entity_relation_graph,
+                    self.llm_response_cache,
+                    self.doc_status,
+                ):
+                    if storage:
+                        await storage.initialize()
 
             self._storages_status = StoragesStatus.INITIALIZED
             logger.debug("All storage types initialized")
@@ -1141,6 +1271,7 @@ class LightRAG:
     async def ainsert(
         self,
         input: str | list[str],
+        workspace: str | None = None,
         split_by_character: str | None = None,
         split_by_character_only: bool = False,
         ids: str | list[str] | None = None,
@@ -1151,6 +1282,7 @@ class LightRAG:
 
         Args:
             input: Single document string or list of document strings
+            workspace: Workspace identifier. If None, uses default workspace.
             split_by_character: if split_by_character is not None, split the string by character, if chunk longer than
             chunk_token_size, it will be split again by token size.
             split_by_character_only: if split_by_character_only is True, split the string by character only, when
@@ -1162,13 +1294,16 @@ class LightRAG:
         Returns:
             str: tracking ID for monitoring processing status
         """
+        # Validate workspace exists (prevents auto-creation)
+        effective_workspace = await self._validate_workspace_exists(workspace)
+
         # Generate track_id if not provided
         if track_id is None:
             track_id = generate_track_id("insert")
 
-        await self.apipeline_enqueue_documents(input, ids, file_paths, track_id)
+        await self.apipeline_enqueue_documents(input, ids, file_paths, track_id, workspace=effective_workspace)
         await self.apipeline_process_enqueue_documents(
-            split_by_character, split_by_character_only
+            split_by_character, split_by_character_only, workspace=effective_workspace
         )
 
         return track_id
@@ -1251,6 +1386,7 @@ class LightRAG:
         ids: list[str] | None = None,
         file_paths: str | list[str] | None = None,
         track_id: str | None = None,
+        workspace: str | None = None,
     ) -> str:
         """
         Pipeline for Processing Documents
@@ -1265,10 +1401,21 @@ class LightRAG:
             ids: list of unique document IDs, if not provided, MD5 hash IDs will be generated
             file_paths: list of file paths corresponding to each document, used for citation
             track_id: tracking ID for monitoring processing status, if not provided, will be generated with "enqueue" prefix
+            workspace: Workspace identifier. If None, uses default workspace.
 
         Returns:
             str: tracking ID for monitoring processing status
         """
+        # Validate workspace exists (prevents auto-creation)
+        effective_workspace = await self._validate_workspace_exists(workspace)
+        
+        # Ensure storages are initialized for this workspace
+        await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+        
+        # Get workspace-specific storages
+        storages = self._get_storages_for_workspace(effective_workspace, require_existing=True)
+        full_docs = storages["full_docs"]
+        doc_status = storages["doc_status"]
         # Generate track_id if not provided
         if track_id is None or track_id.strip() == "":
             track_id = generate_track_id("enqueue")
@@ -1350,7 +1497,7 @@ class LightRAG:
         # Get docs ids
         all_new_doc_ids = set(new_docs.keys())
         # Exclude IDs of documents that are already enqueued
-        unique_new_doc_ids = await self.doc_status.filter_keys(all_new_doc_ids)
+        unique_new_doc_ids = await doc_status.filter_keys(all_new_doc_ids)
 
         # Log ignored document IDs (documents that were filtered out because they already exist)
         ignored_ids = list(all_new_doc_ids - unique_new_doc_ids)
@@ -1377,7 +1524,13 @@ class LightRAG:
             return
 
         # 4. Store document content in full_docs and status in doc_status
-        #    Store full document content separately
+        #    Ensure storages are initialized before use
+        if hasattr(full_docs, '_storage_lock') and full_docs._storage_lock is None:
+            await full_docs.initialize()
+        if hasattr(doc_status, '_storage_lock') and doc_status._storage_lock is None:
+            await doc_status.initialize()
+        
+        # Store full document content separately
         full_docs_data = {
             doc_id: {
                 "content": contents[doc_id]["content"],
@@ -1385,13 +1538,13 @@ class LightRAG:
             }
             for doc_id in new_docs.keys()
         }
-        await self.full_docs.upsert(full_docs_data)
+        await full_docs.upsert(full_docs_data)
         # Persist data to disk immediately
-        await self.full_docs.index_done_callback()
+        await full_docs.index_done_callback()
 
         # Store document status (without content)
-        await self.doc_status.upsert(new_docs)
-        logger.debug(f"Stored {len(new_docs)} new unique documents")
+        await doc_status.upsert(new_docs)
+        logger.debug(f"Stored {len(new_docs)} new unique documents in workspace '{effective_workspace}'")
 
         return track_id
 
@@ -1399,6 +1552,7 @@ class LightRAG:
         self,
         error_files: list[dict[str, Any]],
         track_id: str | None = None,
+        workspace: str | None = None,
     ) -> None:
         """
         Record file extraction errors in doc_status storage.
@@ -1415,6 +1569,7 @@ class LightRAG:
                 - original_error: Full error message (for error_msg)
                 - file_size: File size in bytes (for content_length, 0 if unknown)
             track_id: Optional tracking ID for grouping related operations
+            workspace: Optional workspace identifier. If None, uses instance default workspace.
 
         Returns:
             None
@@ -1422,6 +1577,23 @@ class LightRAG:
         if not error_files:
             logger.debug("No error files to record")
             return
+
+        # Determine effective workspace
+        effective_workspace = workspace or self.workspace
+        
+        # Get workspace-specific doc_status storage
+        if effective_workspace:
+            # Validate workspace exists (prevents auto-creation)
+            effective_workspace = await self._validate_workspace_exists(effective_workspace)
+            # Ensure storages are initialized
+            await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+            storages = self._get_storages_for_workspace(effective_workspace, require_existing=True)
+            doc_status = storages.get("doc_status")
+        else:
+            doc_status = self.doc_status
+
+        if doc_status is None:
+            raise ValueError("doc_status storage not available")
 
         # Generate track_id if not provided
         if track_id is None or track_id.strip() == "":
@@ -1459,7 +1631,7 @@ class LightRAG:
 
         # Store error documents in doc_status
         if error_docs:
-            await self.doc_status.upsert(error_docs)
+            await doc_status.upsert(error_docs)
             # Log each error for debugging
             for doc_id, error_doc in error_docs.items():
                 logger.error(
@@ -1471,16 +1643,22 @@ class LightRAG:
         to_process_docs: dict[str, DocProcessingStatus],
         pipeline_status: dict,
         pipeline_status_lock: asyncio.Lock,
+        full_docs: BaseKVStorage | None = None,
+        doc_status: DocStatusStorage | None = None,
     ) -> dict[str, DocProcessingStatus]:
         """Validate and fix document data consistency by deleting inconsistent entries, but preserve failed documents"""
         inconsistent_docs = []
         failed_docs_to_preserve = []
         successful_deletions = 0
 
+        # Use provided storages or fall back to instance storages
+        effective_full_docs = full_docs or self.full_docs
+        effective_doc_status = doc_status or self.doc_status
+
         # Check each document's data consistency
         for doc_id, status_doc in to_process_docs.items():
             # Check if corresponding content exists in full_docs
-            content_data = await self.full_docs.get_by_id(doc_id)
+            content_data = await effective_full_docs.get_by_id(doc_id)
             if not content_data:
                 # Check if this is a failed document that should be preserved
                 if (
@@ -1520,7 +1698,7 @@ class LightRAG:
                     file_path = getattr(status_doc, "file_path", "unknown_source")
 
                     # Delete doc_status entry
-                    await self.doc_status.delete([doc_id])
+                    await effective_doc_status.delete([doc_id])
                     successful_deletions += 1
 
                     # Log successful deletion
@@ -1556,7 +1734,7 @@ class LightRAG:
 
         for doc_id, status_doc in to_process_docs.items():
             # Check if document has corresponding content in full_docs (consistency check)
-            content_data = await self.full_docs.get_by_id(doc_id)
+            content_data = await effective_full_docs.get_by_id(doc_id)
             if content_data:  # Document passes consistency check
                 # Check if document is in PROCESSING or FAILED status
                 if hasattr(status_doc, "status") and status_doc.status in [
@@ -1583,7 +1761,7 @@ class LightRAG:
 
         # Update doc_status storage if there are documents to reset
         if docs_to_reset:
-            await self.doc_status.upsert(docs_to_reset)
+            await effective_doc_status.upsert(docs_to_reset)
 
             async with pipeline_status_lock:
                 reset_message = f"Reset {reset_count} documents from PROCESSING/FAILED to PENDING status"
@@ -1597,6 +1775,7 @@ class LightRAG:
         self,
         split_by_character: str | None = None,
         split_by_character_only: bool = False,
+        workspace: str | None = None,
     ) -> None:
         """
         Process pending documents by splitting them into chunks, processing
@@ -1608,14 +1787,65 @@ class LightRAG:
         3. Split document content into chunks
         4. Process each chunk for entity and relation extraction
         5. Update the document status
+        
+        Args:
+            split_by_character: Character to split by
+            split_by_character_only: Whether to only split by character
+            workspace: Workspace identifier. If None, uses default workspace.
         """
+        # Validate workspace exists (prevents auto-creation)
+        effective_workspace = await self._validate_workspace_exists(workspace)
+        
+        # Ensure storages are initialized for this workspace
+        await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+        
+        # Get workspace-specific storages
+        storages = self._get_storages_for_workspace(effective_workspace, require_existing=True)
+        doc_status = storages["doc_status"]
+        full_docs = storages["full_docs"]
+        text_chunks = storages["text_chunks"]
+        full_entities = storages["full_entities"]
+        full_relations = storages["full_relations"]
+        entity_chunks = storages["entity_chunks"]
+        relation_chunks = storages["relation_chunks"]
+        chunk_entity_relation_graph = storages["chunk_entity_relation_graph"]
+        entities_vdb = storages["entities_vdb"]
+        relationships_vdb = storages["relationships_vdb"]
+        chunks_vdb = storages["chunks_vdb"]
+        llm_response_cache = storages["llm_response_cache"]
+        
+        # Ensure all storages are initialized before use
+        storage_list = [
+            doc_status, full_docs, text_chunks, full_entities, full_relations,
+            entity_chunks, relation_chunks, chunk_entity_relation_graph,
+            entities_vdb, relationships_vdb, chunks_vdb, llm_response_cache
+        ]
+        for storage in storage_list:
+            if storage:
+                # Check for different initialization patterns
+                needs_init = False
+                # Pattern 1: Storage with _storage_lock (JsonKVStorage, etc.)
+                if hasattr(storage, '_storage_lock') and storage._storage_lock is None:
+                    needs_init = True
+                # Pattern 2: Storage with _initialized flag (QdrantVectorDBStorage, etc.)
+                elif hasattr(storage, '_initialized') and not storage._initialized:
+                    needs_init = True
+                # Pattern 3: Storage with _client that is None (QdrantVectorDBStorage)
+                elif hasattr(storage, '_client') and storage._client is None:
+                    needs_init = True
+                # Pattern 4: Storage with db that is None (PGVectorStorage, MongoVectorDBStorage, etc.)
+                elif hasattr(storage, 'db') and storage.db is None:
+                    needs_init = True
+                
+                if needs_init:
+                    await storage.initialize()
 
         # Get pipeline status shared data and lock
         pipeline_status = await get_namespace_data(
-            "pipeline_status", workspace=self.workspace
+            "pipeline_status", workspace=effective_workspace
         )
         pipeline_status_lock = get_namespace_lock(
-            "pipeline_status", workspace=self.workspace
+            "pipeline_status", workspace=effective_workspace
         )
 
         # Check if another process is already processing the queue
@@ -1623,9 +1853,9 @@ class LightRAG:
             # Ensure only one worker is processing documents
             if not pipeline_status.get("busy", False):
                 processing_docs, failed_docs, pending_docs = await asyncio.gather(
-                    self.doc_status.get_docs_by_status(DocStatus.PROCESSING),
-                    self.doc_status.get_docs_by_status(DocStatus.FAILED),
-                    self.doc_status.get_docs_by_status(DocStatus.PENDING),
+                    doc_status.get_docs_by_status(DocStatus.PROCESSING),
+                    doc_status.get_docs_by_status(DocStatus.FAILED),
+                    doc_status.get_docs_by_status(DocStatus.PENDING),
                 )
 
                 to_process_docs: dict[str, DocProcessingStatus] = {}
@@ -1688,7 +1918,7 @@ class LightRAG:
 
                 # Validate document data consistency and fix any issues as part of the pipeline
                 to_process_docs = await self._validate_and_fix_document_consistency(
-                    to_process_docs, pipeline_status, pipeline_status_lock
+                    to_process_docs, pipeline_status, pipeline_status_lock, full_docs=full_docs, doc_status=doc_status
                 )
 
                 if not to_process_docs:
@@ -1739,8 +1969,49 @@ class LightRAG:
                     pipeline_status: dict,
                     pipeline_status_lock: asyncio.Lock,
                     semaphore: asyncio.Semaphore,
+                    storages: Dict[str, Any],
                 ) -> None:
                     """Process single document"""
+                    # Extract storages from dict
+                    doc_status_ws = storages["doc_status"]
+                    full_docs_ws = storages["full_docs"]
+                    chunks_vdb_ws = storages["chunks_vdb"]
+                    text_chunks_ws = storages["text_chunks"]
+                    chunk_entity_relation_graph_ws = storages["chunk_entity_relation_graph"]
+                    entities_vdb_ws = storages["entities_vdb"]
+                    relationships_vdb_ws = storages["relationships_vdb"]
+                    full_entities_ws = storages["full_entities"]
+                    full_relations_ws = storages["full_relations"]
+                    llm_response_cache_ws = storages["llm_response_cache"]
+                    entity_chunks_ws = storages["entity_chunks"]
+                    relation_chunks_ws = storages["relation_chunks"]
+                    
+                    # Ensure all storages are initialized before use
+                    storage_list = [
+                        doc_status_ws, full_docs_ws, chunks_vdb_ws, text_chunks_ws,
+                        chunk_entity_relation_graph_ws, entities_vdb_ws,
+                        relationships_vdb_ws, full_entities_ws, full_relations_ws,
+                        llm_response_cache_ws, entity_chunks_ws, relation_chunks_ws
+                    ]
+                    for storage in storage_list:
+                        if storage:
+                            # Check for different initialization patterns
+                            needs_init = False
+                            # Pattern 1: Storage with _storage_lock (JsonKVStorage, etc.)
+                            if hasattr(storage, '_storage_lock') and storage._storage_lock is None:
+                                needs_init = True
+                            # Pattern 2: Storage with _initialized flag (QdrantVectorDBStorage, etc.)
+                            elif hasattr(storage, '_initialized') and not storage._initialized:
+                                needs_init = True
+                            # Pattern 3: Storage with _client that is None (QdrantVectorDBStorage)
+                            elif hasattr(storage, '_client') and storage._client is None:
+                                needs_init = True
+                            # Pattern 4: Storage with db that is None (PGVectorStorage, MongoVectorDBStorage, etc.)
+                            elif hasattr(storage, 'db') and storage.db is None:
+                                needs_init = True
+                            
+                            if needs_init:
+                                await storage.initialize()
                     # Initialize variables at the start to prevent UnboundLocalError in error handling
                     file_path = "unknown_source"
                     current_file_number = 0
@@ -1791,7 +2062,7 @@ class LightRAG:
                                     )
 
                             # Get document content from full_docs
-                            content_data = await self.full_docs.get_by_id(doc_id)
+                            content_data = await full_docs_ws.get_by_id(doc_id)
                             if not content_data:
                                 raise Exception(
                                     f"Document content not found in full_docs for doc_id: {doc_id}"
@@ -1844,7 +2115,7 @@ class LightRAG:
                             # Process document in two stages
                             # Stage 1: Process text chunks and docs (parallel execution)
                             doc_status_task = asyncio.create_task(
-                                self.doc_status.upsert(
+                                doc_status_ws.upsert(
                                     {
                                         doc_id: {
                                             "status": DocStatus.PROCESSING,
@@ -1868,10 +2139,10 @@ class LightRAG:
                                 )
                             )
                             chunks_vdb_task = asyncio.create_task(
-                                self.chunks_vdb.upsert(chunks)
+                                chunks_vdb_ws.upsert(chunks)
                             )
                             text_chunks_task = asyncio.create_task(
-                                self.text_chunks.upsert(chunks)
+                                text_chunks_ws.upsert(chunks)
                             )
 
                             # First stage tasks (parallel execution)
@@ -1888,7 +2159,7 @@ class LightRAG:
                             # Stage 2: Process entity relation graph (after text_chunks are saved)
                             entity_relation_task = asyncio.create_task(
                                 self._process_extract_entities(
-                                    chunks, pipeline_status, pipeline_status_lock
+                                    chunks, pipeline_status, pipeline_status_lock, storages=storages
                                 )
                             )
                             chunk_results = await entity_relation_task
@@ -1928,9 +2199,9 @@ class LightRAG:
                                     task.cancel()
 
                             # Persistent llm cache with error handling
-                            if self.llm_response_cache:
+                            if llm_response_cache_ws:
                                 try:
-                                    await self.llm_response_cache.index_done_callback()
+                                    await llm_response_cache_ws.index_done_callback()
                                 except Exception as persist_error:
                                     logger.error(
                                         f"Failed to persist LLM cache: {persist_error}"
@@ -1940,7 +2211,7 @@ class LightRAG:
                             processing_end_time = int(time.time())
 
                             # Update document status to failed
-                            await self.doc_status.upsert(
+                            await doc_status_ws.upsert(
                                 {
                                     doc_id: {
                                         "status": DocStatus.FAILED,
@@ -1976,18 +2247,18 @@ class LightRAG:
                                 # Use chunk_results from entity_relation_task
                                 await merge_nodes_and_edges(
                                     chunk_results=chunk_results,  # result collected from entity_relation_task
-                                    knowledge_graph_inst=self.chunk_entity_relation_graph,
-                                    entity_vdb=self.entities_vdb,
-                                    relationships_vdb=self.relationships_vdb,
+                                    knowledge_graph_inst=chunk_entity_relation_graph_ws,
+                                    entity_vdb=entities_vdb_ws,
+                                    relationships_vdb=relationships_vdb_ws,
                                     global_config=asdict(self),
-                                    full_entities_storage=self.full_entities,
-                                    full_relations_storage=self.full_relations,
+                                    full_entities_storage=full_entities_ws,
+                                    full_relations_storage=full_relations_ws,
                                     doc_id=doc_id,
                                     pipeline_status=pipeline_status,
                                     pipeline_status_lock=pipeline_status_lock,
-                                    llm_response_cache=self.llm_response_cache,
-                                    entity_chunks_storage=self.entity_chunks,
-                                    relation_chunks_storage=self.relation_chunks,
+                                    llm_response_cache=llm_response_cache_ws,
+                                    entity_chunks_storage=entity_chunks_ws,
+                                    relation_chunks_storage=relation_chunks_ws,
                                     current_file_number=current_file_number,
                                     total_files=total_files,
                                     file_path=file_path,
@@ -1996,7 +2267,7 @@ class LightRAG:
                                 # Record processing end time
                                 processing_end_time = int(time.time())
 
-                                await self.doc_status.upsert(
+                                await doc_status_ws.upsert(
                                     {
                                         doc_id: {
                                             "status": DocStatus.PROCESSED,
@@ -2098,6 +2369,7 @@ class LightRAG:
                             pipeline_status,
                             pipeline_status_lock,
                             semaphore,
+                            storages,
                         )
                     )
 
@@ -2157,24 +2429,34 @@ class LightRAG:
                 pipeline_status["history_messages"].append(log_message)
 
     async def _process_extract_entities(
-        self, chunk: dict[str, Any], pipeline_status=None, pipeline_status_lock=None
+        self, 
+        chunk: dict[str, Any], 
+        pipeline_status=None, 
+        pipeline_status_lock=None,
+        storages: Dict[str, Any] | None = None,
     ) -> list:
+        # Use workspace-specific storages if provided, otherwise fall back to instance storages
+        effective_llm_response_cache = storages["llm_response_cache"] if storages else self.llm_response_cache
+        effective_text_chunks = storages["text_chunks"] if storages else self.text_chunks
+        
         try:
             chunk_results = await extract_entities(
                 chunk,
                 global_config=asdict(self),
                 pipeline_status=pipeline_status,
                 pipeline_status_lock=pipeline_status_lock,
-                llm_response_cache=self.llm_response_cache,
-                text_chunks_storage=self.text_chunks,
+                llm_response_cache=effective_llm_response_cache,
+                text_chunks_storage=effective_text_chunks,
             )
             return chunk_results
         except Exception as e:
             error_msg = f"Failed to extract entities and relationships: {str(e)}"
             logger.error(error_msg)
-            async with pipeline_status_lock:
-                pipeline_status["latest_message"] = error_msg
-                pipeline_status["history_messages"].append(error_msg)
+            if pipeline_status_lock:
+                async with pipeline_status_lock:
+                    if pipeline_status:
+                        pipeline_status["latest_message"] = error_msg
+                        pipeline_status["history_messages"].append(error_msg)
             raise e
 
     async def _insert_done(
@@ -2413,6 +2695,7 @@ class LightRAG:
     async def aquery(
         self,
         query: str,
+        workspace: str | None = None,
         param: QueryParam = QueryParam(),
         system_prompt: str | None = None,
     ) -> str | AsyncIterator[str]:
@@ -2424,6 +2707,7 @@ class LightRAG:
 
         Args:
             query (str): The query to be executed.
+            workspace: Workspace identifier. If None, uses default workspace.
             param (QueryParam): Configuration parameters for query execution.
                 If param.model_func is provided, it will be used instead of the global model.
             system_prompt (Optional[str]): Custom prompts for fine-tuned control over the system's behavior. Defaults to None, which uses PROMPTS["rag_response"].
@@ -2434,7 +2718,7 @@ class LightRAG:
                 - Streaming: Returns AsyncIterator[str]
         """
         # Call the new aquery_llm function to get complete results
-        result = await self.aquery_llm(query, param, system_prompt)
+        result = await self.aquery_llm(query, param, system_prompt, workspace=workspace)
 
         # Extract and return only the LLM response for backward compatibility
         llm_response = result.get("llm_response", {})
@@ -2468,6 +2752,7 @@ class LightRAG:
     async def aquery_data(
         self,
         query: str,
+        workspace: str | None = None,
         param: QueryParam = QueryParam(),
     ) -> dict[str, Any]:
         """
@@ -2576,6 +2861,21 @@ class LightRAG:
             actual data is nested under the 'data' field, with 'status' and 'message'
             fields at the top level.
         """
+        # Validate workspace exists (prevents auto-creation)
+        effective_workspace = await self._validate_workspace_exists(workspace)
+        
+        # Ensure storages are initialized
+        await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+        
+        # Get workspace-specific storages
+        storages = self._get_storages_for_workspace(effective_workspace, require_existing=True)
+        chunk_entity_relation_graph = storages["chunk_entity_relation_graph"]
+        entities_vdb = storages["entities_vdb"]
+        relationships_vdb = storages["relationships_vdb"]
+        text_chunks = storages["text_chunks"]
+        llm_response_cache = storages["llm_response_cache"]
+        chunks_vdb = storages["chunks_vdb"]
+        
         global_config = asdict(self)
 
         # Create a copy of param to avoid modifying the original
@@ -2605,24 +2905,24 @@ class LightRAG:
             logger.debug(f"[aquery_data] Using kg_query for mode: {data_param.mode}")
             query_result = await kg_query(
                 query.strip(),
-                self.chunk_entity_relation_graph,
-                self.entities_vdb,
-                self.relationships_vdb,
-                self.text_chunks,
+                chunk_entity_relation_graph,
+                entities_vdb,
+                relationships_vdb,
+                text_chunks,
                 data_param,  # Use data_param with only_need_context=True
                 global_config,
-                hashing_kv=self.llm_response_cache,
+                hashing_kv=llm_response_cache,
                 system_prompt=None,
-                chunks_vdb=self.chunks_vdb,
+                chunks_vdb=chunks_vdb,
             )
         elif data_param.mode == "naive":
             logger.debug(f"[aquery_data] Using naive_query for mode: {data_param.mode}")
             query_result = await naive_query(
                 query.strip(),
-                self.chunks_vdb,
+                chunks_vdb,
                 data_param,  # Use data_param with only_need_context=True
                 global_config,
-                hashing_kv=self.llm_response_cache,
+                hashing_kv=llm_response_cache,
                 system_prompt=None,
             )
         elif data_param.mode == "bypass":
@@ -2677,6 +2977,7 @@ class LightRAG:
         query: str,
         param: QueryParam = QueryParam(),
         system_prompt: str | None = None,
+        workspace: str | None = None,
     ) -> dict[str, Any]:
         """
         Asynchronous complete query API: returns structured retrieval results with LLM generation.
@@ -2688,10 +2989,26 @@ class LightRAG:
             query: Query text for retrieval and LLM generation.
             param: Query parameters controlling retrieval and LLM behavior.
             system_prompt: Optional custom system prompt for LLM generation.
+            workspace: Workspace identifier. If None, uses default workspace.
 
         Returns:
             dict[str, Any]: Complete response with structured data and LLM response.
         """
+        # Validate workspace exists (prevents auto-creation)
+        effective_workspace = await self._validate_workspace_exists(workspace)
+        
+        # Ensure storages are initialized
+        await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+        
+        # Get workspace-specific storages
+        storages = self._get_storages_for_workspace(effective_workspace, require_existing=True)
+        chunk_entity_relation_graph = storages["chunk_entity_relation_graph"]
+        entities_vdb = storages["entities_vdb"]
+        relationships_vdb = storages["relationships_vdb"]
+        text_chunks = storages["text_chunks"]
+        llm_response_cache = storages["llm_response_cache"]
+        chunks_vdb = storages["chunks_vdb"]
+        
         logger.debug(f"[aquery_llm] Query param: {param}")
 
         global_config = asdict(self)
@@ -2702,23 +3019,23 @@ class LightRAG:
             if param.mode in ["local", "global", "hybrid", "mix"]:
                 query_result = await kg_query(
                     query.strip(),
-                    self.chunk_entity_relation_graph,
-                    self.entities_vdb,
-                    self.relationships_vdb,
-                    self.text_chunks,
+                    chunk_entity_relation_graph,
+                    entities_vdb,
+                    relationships_vdb,
+                    text_chunks,
                     param,
                     global_config,
-                    hashing_kv=self.llm_response_cache,
+                    hashing_kv=llm_response_cache,
                     system_prompt=system_prompt,
-                    chunks_vdb=self.chunks_vdb,
+                    chunks_vdb=chunks_vdb,
                 )
             elif param.mode == "naive":
                 query_result = await naive_query(
                     query.strip(),
-                    self.chunks_vdb,
+                    chunks_vdb,
                     param,
                     global_config,
-                    hashing_kv=self.llm_response_cache,
+                    hashing_kv=llm_response_cache,
                     system_prompt=system_prompt,
                 )
             elif param.mode == "bypass":
@@ -2941,7 +3258,7 @@ class LightRAG:
         return found_statuses
 
     async def adelete_by_doc_id(
-        self, doc_id: str, delete_llm_cache: bool = False
+        self, doc_id: str, workspace: str | None = None, delete_llm_cache: bool = False
     ) -> DeletionResult:
         """Delete a document and all its related data, including chunks, graph elements.
 
@@ -2972,6 +3289,7 @@ class LightRAG:
 
         Args:
             doc_id (str): The unique identifier of the document to be deleted.
+            workspace: Workspace identifier. If None, uses default workspace.
             delete_llm_cache (bool): Whether to delete cached LLM extraction results
                 associated with the document. Defaults to False.
 
@@ -2983,12 +3301,33 @@ class LightRAG:
                 - `status_code` (int): HTTP status code (e.g., 200, 404, 403, 500).
                 - `file_path` (str | None): The file path of the deleted document, if available.
         """
+        # Validate workspace exists (prevents auto-creation)
+        effective_workspace = await self._validate_workspace_exists(workspace)
+        
+        # Ensure storages are initialized
+        await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+        
+        # Get workspace-specific storages
+        storages = self._get_storages_for_workspace(effective_workspace, require_existing=True)
+        doc_status = storages["doc_status"]
+        full_docs = storages["full_docs"]
+        text_chunks = storages["text_chunks"]
+        chunks_vdb = storages["chunks_vdb"]
+        chunk_entity_relation_graph = storages["chunk_entity_relation_graph"]
+        entities_vdb = storages["entities_vdb"]
+        relationships_vdb = storages["relationships_vdb"]
+        full_entities = storages["full_entities"]
+        full_relations = storages["full_relations"]
+        entity_chunks = storages["entity_chunks"]
+        relation_chunks = storages["relation_chunks"]
+        llm_response_cache = storages["llm_response_cache"]
+        
         # Get pipeline status shared data and lock for validation
         pipeline_status = await get_namespace_data(
-            "pipeline_status", workspace=self.workspace
+            "pipeline_status", workspace=effective_workspace
         )
         pipeline_status_lock = get_namespace_lock(
-            "pipeline_status", workspace=self.workspace
+            "pipeline_status", workspace=effective_workspace
         )
 
         # Track whether WE acquired the pipeline
@@ -3041,7 +3380,7 @@ class LightRAG:
 
         try:
             # 1. Get the document status and related data
-            doc_status_data = await self.doc_status.get_by_id(doc_id)
+            doc_status_data = await doc_status.get_by_id(doc_id)
             file_path = doc_status_data.get("file_path") if doc_status_data else None
             if not doc_status_data:
                 logger.warning(f"Document {doc_id} not found")
@@ -3056,32 +3395,32 @@ class LightRAG:
             # Check document status and log warning for non-completed documents
             raw_status = doc_status_data.get("status")
             try:
-                doc_status = DocStatus(raw_status)
+                doc_status_enum = DocStatus(raw_status)
             except ValueError:
-                doc_status = raw_status
+                doc_status_enum = raw_status
 
-            if doc_status != DocStatus.PROCESSED:
-                if doc_status == DocStatus.PENDING:
+            if doc_status_enum != DocStatus.PROCESSED:
+                if doc_status_enum == DocStatus.PENDING:
                     warning_msg = (
                         f"Deleting {doc_id} {file_path}(previous status: PENDING)"
                     )
-                elif doc_status == DocStatus.PROCESSING:
+                elif doc_status_enum == DocStatus.PROCESSING:
                     warning_msg = (
                         f"Deleting {doc_id} {file_path}(previous status: PROCESSING)"
                     )
-                elif doc_status == DocStatus.PREPROCESSED:
+                elif doc_status_enum == DocStatus.PREPROCESSED:
                     warning_msg = (
                         f"Deleting {doc_id} {file_path}(previous status: PREPROCESSED)"
                     )
-                elif doc_status == DocStatus.FAILED:
+                elif doc_status_enum == DocStatus.FAILED:
                     warning_msg = (
                         f"Deleting {doc_id} {file_path}(previous status: FAILED)"
                     )
                 else:
                     status_text = (
-                        doc_status.value
-                        if isinstance(doc_status, DocStatus)
-                        else str(doc_status)
+                        doc_status_enum.value
+                        if isinstance(doc_status_enum, DocStatus)
+                        else str(doc_status_enum)
                     )
                     warning_msg = (
                         f"Deleting {doc_id} {file_path}(previous status: {status_text})"
@@ -3101,8 +3440,8 @@ class LightRAG:
                 deletion_operations_started = True
                 try:
                     # Still need to delete the doc status and full doc
-                    await self.full_docs.delete([doc_id])
-                    await self.doc_status.delete([doc_id])
+                    await full_docs.delete([doc_id])
+                    await doc_status.delete([doc_id])
                 except Exception as e:
                     logger.error(
                         f"Failed to delete document {doc_id} with no chunks: {e}"
@@ -3129,19 +3468,19 @@ class LightRAG:
             deletion_operations_started = True
 
             if delete_llm_cache and chunk_ids:
-                if not self.llm_response_cache:
+                if not llm_response_cache:
                     logger.info(
                         "Skipping LLM cache collection for document %s because cache storage is unavailable",
                         doc_id,
                     )
-                elif not self.text_chunks:
+                elif not text_chunks:
                     logger.info(
                         "Skipping LLM cache collection for document %s because text chunk storage is unavailable",
                         doc_id,
                     )
                 else:
                     try:
-                        chunk_data_list = await self.text_chunks.get_by_ids(
+                        chunk_data_list = await text_chunks.get_by_ids(
                             list(chunk_ids)
                         )
                         seen_cache_ids: set[str] = set()
@@ -3189,8 +3528,8 @@ class LightRAG:
 
             try:
                 # Get affected entities and relations from full_entities and full_relations storage
-                doc_entities_data = await self.full_entities.get_by_id(doc_id)
-                doc_relations_data = await self.full_relations.get_by_id(doc_id)
+                doc_entities_data = await full_entities.get_by_id(doc_id)
+                doc_relations_data = await full_relations.get_by_id(doc_id)
 
                 affected_nodes = []
                 affected_edges = []
@@ -3199,7 +3538,7 @@ class LightRAG:
                 if doc_entities_data and "entity_names" in doc_entities_data:
                     entity_names = doc_entities_data["entity_names"]
                     # get_nodes_batch returns dict[str, dict], need to convert to list[dict]
-                    nodes_dict = await self.chunk_entity_relation_graph.get_nodes_batch(
+                    nodes_dict = await chunk_entity_relation_graph.get_nodes_batch(
                         entity_names
                     )
                     for entity_name in entity_names:
@@ -3217,7 +3556,7 @@ class LightRAG:
                         {"src": pair[0], "tgt": pair[1]} for pair in relation_pairs
                     ]
                     # get_edges_batch returns dict[tuple[str, str], dict], need to convert to list[dict]
-                    edges_dict = await self.chunk_entity_relation_graph.get_edges_batch(
+                    edges_dict = await chunk_entity_relation_graph.get_edges_batch(
                         edge_pairs_dicts
                     )
 
@@ -3245,8 +3584,8 @@ class LightRAG:
                         continue
 
                     existing_sources: list[str] = []
-                    if self.entity_chunks:
-                        stored_chunks = await self.entity_chunks.get_by_id(node_label)
+                    if entity_chunks:
+                        stored_chunks = await entity_chunks.get_by_id(node_label)
                         if stored_chunks and isinstance(stored_chunks, dict):
                             existing_sources = [
                                 chunk_id
@@ -3303,9 +3642,9 @@ class LightRAG:
                         continue
 
                     existing_sources: list[str] = []
-                    if self.relation_chunks:
+                    if relation_chunks:
                         storage_key = make_relation_chunk_key(src, tgt)
-                        stored_chunks = await self.relation_chunks.get_by_id(
+                        stored_chunks = await relation_chunks.get_by_id(
                             storage_key
                         )
                         if stored_chunks and isinstance(stored_chunks, dict):
@@ -3351,7 +3690,7 @@ class LightRAG:
 
                 current_time = int(time.time())
 
-                if entity_chunk_updates and self.entity_chunks:
+                if entity_chunk_updates and entity_chunks:
                     entity_upsert_payload = {}
                     for entity_name, remaining in entity_chunk_updates.items():
                         if not remaining:
@@ -3363,9 +3702,9 @@ class LightRAG:
                             "updated_at": current_time,
                         }
                     if entity_upsert_payload:
-                        await self.entity_chunks.upsert(entity_upsert_payload)
+                        await entity_chunks.upsert(entity_upsert_payload)
 
-                if relation_chunk_updates and self.relation_chunks:
+                if relation_chunk_updates and relation_chunks:
                     relation_upsert_payload = {}
                     for edge_tuple, remaining in relation_chunk_updates.items():
                         if not remaining:
@@ -3379,7 +3718,7 @@ class LightRAG:
                         }
 
                     if relation_upsert_payload:
-                        await self.relation_chunks.upsert(relation_upsert_payload)
+                        await relation_chunks.upsert(relation_upsert_payload)
 
             except Exception as e:
                 logger.error(f"Failed to process graph analysis results: {e}")
@@ -3390,8 +3729,8 @@ class LightRAG:
             # 5. Delete chunks from storage
             if chunk_ids:
                 try:
-                    await self.chunks_vdb.delete(chunk_ids)
-                    await self.text_chunks.delete(chunk_ids)
+                    await chunks_vdb.delete(chunk_ids)
+                    await text_chunks.delete(chunk_ids)
 
                     async with pipeline_status_lock:
                         log_message = (
@@ -3417,20 +3756,20 @@ class LightRAG:
                                 compute_mdhash_id(tgt + src, prefix="rel-"),
                             ]
                         )
-                    await self.relationships_vdb.delete(rel_ids_to_delete)
+                    await relationships_vdb.delete(rel_ids_to_delete)
 
                     # Delete from graph
-                    await self.chunk_entity_relation_graph.remove_edges(
+                    await chunk_entity_relation_graph.remove_edges(
                         list(relationships_to_delete)
                     )
 
                     # Delete from relation_chunks storage
-                    if self.relation_chunks:
+                    if relation_chunks:
                         relation_storage_keys = [
                             make_relation_chunk_key(src, tgt)
                             for src, tgt in relationships_to_delete
                         ]
-                        await self.relation_chunks.delete(relation_storage_keys)
+                        await relation_chunks.delete(relation_storage_keys)
 
                     async with pipeline_status_lock:
                         log_message = f"Successfully deleted {len(relationships_to_delete)} relations"
@@ -3447,7 +3786,7 @@ class LightRAG:
                 try:
                     # Batch get all edges for entities to avoid N+1 query problem
                     nodes_edges_dict = (
-                        await self.chunk_entity_relation_graph.get_nodes_edges_batch(
+                        await chunk_entity_relation_graph.get_nodes_edges_batch(
                             list(entities_to_delete)
                         )
                     )
@@ -3496,22 +3835,22 @@ class LightRAG:
                                     compute_mdhash_id(tgt + src, prefix="rel-"),
                                 ]
                             )
-                        await self.relationships_vdb.delete(rel_ids_to_delete)
+                        await relationships_vdb.delete(rel_ids_to_delete)
 
                         # Delete from relation_chunks storage
-                        if self.relation_chunks:
+                        if relation_chunks:
                             relation_storage_keys = [
                                 make_relation_chunk_key(src, tgt)
                                 for src, tgt in edges_to_delete
                             ]
-                            await self.relation_chunks.delete(relation_storage_keys)
+                            await relation_chunks.delete(relation_storage_keys)
 
                         logger.info(
                             f"Cleaned {len(edges_to_delete)} residual edges from VDB and chunk-tracking storage"
                         )
 
                     # Delete from graph (edges will be auto-deleted with nodes)
-                    await self.chunk_entity_relation_graph.remove_nodes(
+                    await chunk_entity_relation_graph.remove_nodes(
                         list(entities_to_delete)
                     )
 
@@ -3520,11 +3859,11 @@ class LightRAG:
                         compute_mdhash_id(entity, prefix="ent-")
                         for entity in entities_to_delete
                     ]
-                    await self.entities_vdb.delete(entity_vdb_ids)
+                    await entities_vdb.delete(entity_vdb_ids)
 
                     # Delete from entity_chunks storage
-                    if self.entity_chunks:
-                        await self.entity_chunks.delete(list(entities_to_delete))
+                    if entity_chunks:
+                        await entity_chunks.delete(list(entities_to_delete))
 
                     async with pipeline_status_lock:
                         log_message = (
@@ -3547,16 +3886,16 @@ class LightRAG:
                     await rebuild_knowledge_from_chunks(
                         entities_to_rebuild=entities_to_rebuild,
                         relationships_to_rebuild=relationships_to_rebuild,
-                        knowledge_graph_inst=self.chunk_entity_relation_graph,
-                        entities_vdb=self.entities_vdb,
-                        relationships_vdb=self.relationships_vdb,
-                        text_chunks_storage=self.text_chunks,
-                        llm_response_cache=self.llm_response_cache,
+                        knowledge_graph_inst=chunk_entity_relation_graph,
+                        entities_vdb=entities_vdb,
+                        relationships_vdb=relationships_vdb,
+                        text_chunks_storage=text_chunks,
+                        llm_response_cache=llm_response_cache,
                         global_config=asdict(self),
                         pipeline_status=pipeline_status,
                         pipeline_status_lock=pipeline_status_lock,
-                        entity_chunks_storage=self.entity_chunks,
-                        relation_chunks_storage=self.relation_chunks,
+                        entity_chunks_storage=entity_chunks,
+                        relation_chunks_storage=relation_chunks,
                     )
 
                 except Exception as e:
@@ -3565,8 +3904,8 @@ class LightRAG:
 
             # 9. Delete from full_entities and full_relations storage
             try:
-                await self.full_entities.delete([doc_id])
-                await self.full_relations.delete([doc_id])
+                await full_entities.delete([doc_id])
+                await full_relations.delete([doc_id])
             except Exception as e:
                 logger.error(f"Failed to delete from full_entities/full_relations: {e}")
                 raise Exception(
@@ -3575,15 +3914,15 @@ class LightRAG:
 
             # 10. Delete original document and status
             try:
-                await self.full_docs.delete([doc_id])
-                await self.doc_status.delete([doc_id])
+                await full_docs.delete([doc_id])
+                await doc_status.delete([doc_id])
             except Exception as e:
                 logger.error(f"Failed to delete document and status: {e}")
                 raise Exception(f"Failed to delete document and status: {e}") from e
 
-            if delete_llm_cache and doc_llm_cache_ids and self.llm_response_cache:
+            if delete_llm_cache and doc_llm_cache_ids and llm_response_cache:
                 try:
-                    await self.llm_response_cache.delete(doc_llm_cache_ids)
+                    await llm_response_cache.delete(doc_llm_cache_ids)
                     cache_log_message = f"Successfully deleted {len(doc_llm_cache_ids)} LLM cache entries for document {doc_id}"
                     logger.info(cache_log_message)
                     async with pipeline_status_lock:
@@ -3745,6 +4084,530 @@ class LightRAG:
             Dict with document id as keys and document status as values
         """
         return await self.doc_status.get_docs_by_track_id(track_id)
+
+    # ==================== Workspace Management Methods ====================
+
+    async def list_workspaces(self) -> list[str]:
+        """
+        List all workspaces that have been initialized or used.
+        
+        For file-based storage backends, this also scans the working directory
+        to discover existing workspace folders.
+        
+        Returns:
+            List of workspace identifiers
+        """
+        workspaces = set(list(self._storage_registry.keys()))
+        
+        # For file-based storage, scan the working directory for workspace folders
+        if os.path.exists(self.working_dir):
+            try:
+                for item in os.listdir(self.working_dir):
+                    item_path = os.path.join(self.working_dir, item)
+                    # Check if it's a directory (potential workspace)
+                    if os.path.isdir(item_path):
+                        # Check if it contains workspace-specific files
+                        # (e.g., kv_store_*.json, graph_*.graphml, etc.)
+                        has_workspace_files = False
+                        try:
+                            for file in os.listdir(item_path):
+                                if any(file.startswith(prefix) for prefix in 
+                                       ['kv_store_', 'graph_', 'vector_', 'doc_status_']):
+                                    has_workspace_files = True
+                                    break
+                        except (OSError, PermissionError):
+                            pass
+                        
+                        if has_workspace_files:
+                            workspaces.add(item)
+            except (OSError, PermissionError) as e:
+                logger.warning(f"Failed to scan working directory for workspaces: {e}")
+        
+        return sorted(list(workspaces))
+
+    async def workspace_exists(self, workspace: str) -> bool:
+        """
+        Check if a workspace exists.
+        
+        Args:
+            workspace: Workspace identifier to check
+            
+        Returns:
+            True if workspace exists, False otherwise
+        """
+        if not workspace or not workspace.strip():
+            return False
+        
+        workspace = workspace.strip()
+        existing_workspaces = await self.list_workspaces()
+        return workspace in existing_workspaces
+
+    async def _validate_workspace_exists(
+        self, workspace: str | None, error_message: str | None = None
+    ) -> str:
+        """
+        Validate that a workspace exists, raising ValueError if it doesn't.
+        
+        This helper method centralizes the common pattern of:
+        1. Determining effective workspace (from parameter or default)
+        2. Validating workspace exists
+        3. Raising ValueError with consistent message if missing
+        
+        Args:
+            workspace: Workspace identifier (may be None to use default)
+            error_message: Optional custom error message. If None, uses default message.
+            
+        Returns:
+            Validated workspace identifier (never None)
+            
+        Raises:
+            ValueError: If workspace is not specified or doesn't exist
+        """
+        # Determine effective workspace
+        effective_workspace = workspace or self.workspace
+        if not effective_workspace:
+            raise ValueError("Workspace must be specified")
+        
+        # Validate workspace exists
+        if not await self.workspace_exists(effective_workspace):
+            if error_message is None:
+                error_message = (
+                    f"Workspace '{effective_workspace}' does not exist. "
+                    "Please create it first using POST /workspaces/"
+                )
+            raise ValueError(error_message)
+        
+        return effective_workspace
+
+    async def create_workspace(self, workspace: str) -> dict[str, Any]:
+        """
+        Create a new workspace explicitly.
+        
+        This method initializes all storage instances for a workspace, creating
+        the necessary directories and data structures. Workspaces are used to
+        isolate documents, entities, relationships, and knowledge graphs.
+        
+        Args:
+            workspace: Workspace identifier (must be validated before calling)
+            
+        Returns:
+            Dictionary with creation status:
+            - workspace: Workspace identifier
+            - created: Whether workspace was created
+            - message: Status message
+            
+        Raises:
+            ValueError: If workspace is invalid or already exists
+        """
+        if not workspace or not workspace.strip():
+            raise ValueError("Workspace must be specified")
+        
+        workspace = workspace.strip()
+        
+        # Check if workspace already exists
+        existing_workspaces = await self.list_workspaces()
+        if workspace in existing_workspaces:
+            raise ValueError(f"Workspace '{workspace}' already exists")
+        
+        # Initialize storages for the workspace (this creates the workspace)
+        # First, ensure storages are created and added to registry
+        # This will trigger __post_init__ which creates the workspace directory
+        storages = self._get_storages_for_workspace(workspace, require_existing=False)
+        
+        # Now initialize the storages (this creates the files)
+        # Note: We use require_existing=False here because we're explicitly creating the workspace
+        await self.initialize_storages(workspace=workspace, require_existing=False)
+        
+        logger.info(f"Workspace '{workspace}' created and initialized successfully")
+        
+        return {
+            "workspace": workspace,
+            "created": True,
+            "message": f"Workspace '{workspace}' created successfully",
+        }
+
+    async def get_workspace_info(self, workspace: str) -> dict[str, Any]:
+        """
+        Get information about a workspace.
+        
+        Args:
+            workspace: Workspace identifier
+            
+        Returns:
+            Dictionary with workspace statistics including:
+            - workspace: Workspace identifier
+            - document_count: Number of documents
+            - entity_count: Number of entities
+            - relation_count: Number of relationships
+            - chunk_count: Number of chunks
+            - pipeline_busy: Whether pipeline is currently processing
+            - pipeline_status: Current pipeline status
+        """
+        if not workspace:
+            raise ValueError("Workspace must be specified")
+        
+        # Ensure workspace exists before initializing (prevent auto-creation)
+        if not await self.workspace_exists(workspace):
+            raise ValueError(
+                f"Workspace '{workspace}' does not exist. "
+                "Please create it first using POST /workspaces/"
+            )
+        
+        # Ensure storages are initialized for this workspace
+        await self.initialize_storages(workspace=workspace, require_existing=True)
+        
+        # Get workspace-specific storages
+        storages = self._get_storages_for_workspace(workspace, require_existing=True)
+        doc_status = storages.get("doc_status")
+        full_docs = storages.get("full_docs")
+        chunk_entity_relation_graph = storages.get("chunk_entity_relation_graph")
+        text_chunks = storages.get("text_chunks")
+        
+        # Ensure storages are initialized before accessing them
+        if doc_status and hasattr(doc_status, '_storage_lock') and doc_status._storage_lock is None:
+            await doc_status.initialize()
+        if chunk_entity_relation_graph and hasattr(chunk_entity_relation_graph, '_storage_lock') and chunk_entity_relation_graph._storage_lock is None:
+            await chunk_entity_relation_graph.initialize()
+        
+        # Get document count using doc_status
+        try:
+            if doc_status and hasattr(doc_status, '_storage_lock') and doc_status._storage_lock is not None:
+                status_counts = await doc_status.get_status_counts()
+                doc_count = sum(status_counts.values())
+            else:
+                doc_count = 0
+        except Exception as e:
+            logger.warning(f"Failed to get document count for workspace {workspace}: {e}")
+            doc_count = 0
+        
+        # Get entity and relation counts from graph
+        try:
+            if chunk_entity_relation_graph and hasattr(chunk_entity_relation_graph, '_storage_lock') and chunk_entity_relation_graph._storage_lock is not None:
+                all_nodes = await chunk_entity_relation_graph.get_all_nodes()
+                entity_count = len(all_nodes)
+            else:
+                entity_count = 0
+        except Exception as e:
+            logger.warning(f"Failed to get entity count for workspace {workspace}: {e}")
+            entity_count = 0
+        
+        try:
+            if chunk_entity_relation_graph and hasattr(chunk_entity_relation_graph, '_storage_lock') and chunk_entity_relation_graph._storage_lock is not None:
+                all_edges = await chunk_entity_relation_graph.get_all_edges()
+                relation_count = len(all_edges)
+            else:
+                relation_count = 0
+        except Exception as e:
+            logger.warning(f"Failed to get relation count for workspace {workspace}: {e}")
+            relation_count = 0
+        
+        # Get chunk count (approximate from text_chunks)
+        try:
+            # Note: This is an approximation - actual count may vary
+            # For exact count, we'd need to scan all chunks
+            chunk_count = 0
+            # Try to get a sample to estimate
+            if hasattr(text_chunks, "get_all"):
+                all_chunks = await text_chunks.get_all()
+                chunk_count = len(all_chunks) if isinstance(all_chunks, dict) else 0
+        except Exception as e:
+            logger.warning(f"Failed to get chunk count for workspace {workspace}: {e}")
+            chunk_count = 0
+        
+        # Get pipeline status
+        from lightrag.kg.shared_storage import initialize_pipeline_status, get_namespace_data
+        try:
+            pipeline_status = await get_namespace_data(
+                "pipeline_status",
+                workspace=workspace
+            )
+            pipeline_busy = pipeline_status.get("busy", False)
+        except Exception as e:
+            # Pipeline status not initialized, initialize it now
+            try:
+                await initialize_pipeline_status(workspace=workspace)
+                pipeline_status = await get_namespace_data(
+                    "pipeline_status",
+                    workspace=workspace
+                )
+                pipeline_busy = pipeline_status.get("busy", False)
+            except Exception as init_error:
+                logger.warning(f"Failed to initialize/get pipeline status for workspace {workspace}: {init_error}")
+                pipeline_status = {}
+                pipeline_busy = False
+        
+        return {
+            "workspace": workspace,
+            "document_count": doc_count,
+            "entity_count": entity_count,
+            "relation_count": relation_count,
+            "chunk_count": chunk_count,
+            "pipeline_busy": pipeline_busy,
+            "pipeline_status": pipeline_status,
+        }
+
+    async def list_documents(
+        self,
+        workspace: str | None = None,
+        status_filter: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        """
+        List documents in a workspace with pagination.
+        
+        Args:
+            workspace: Workspace identifier. If None, uses default workspace.
+            status_filter: Optional status filter (e.g., "PROCESSED", "PENDING")
+            page: Page number (1-indexed)
+            page_size: Number of documents per page
+            
+        Returns:
+            Dictionary with:
+            - workspace: Workspace identifier
+            - documents: List of document information
+            - total: Total number of documents
+            - page: Current page number
+            - page_size: Documents per page
+        """
+        # Validate workspace exists (prevents auto-creation)
+        effective_workspace = await self._validate_workspace_exists(workspace)
+        
+        # Ensure storages are initialized for this workspace
+        await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+        
+        # Get workspace-specific storages
+        storages = self._get_storages_for_workspace(effective_workspace, require_existing=True)
+        doc_status = storages["doc_status"]
+        full_docs = storages["full_docs"]
+        
+        # Ensure storages are initialized before use
+        if doc_status and hasattr(doc_status, '_storage_lock') and doc_status._storage_lock is None:
+            await doc_status.initialize()
+        if full_docs and hasattr(full_docs, '_storage_lock') and full_docs._storage_lock is None:
+            await full_docs.initialize()
+        
+        # Use doc_status.get_docs_paginated if available
+        try:
+            from lightrag.kg.doc_status import DocStatus as DocStatusEnum
+            
+            status_enum = None
+            if status_filter:
+                try:
+                    status_enum = DocStatusEnum(status_filter.upper())
+                except ValueError:
+                    logger.warning(f"Invalid status filter: {status_filter}")
+            
+            docs_list, total = await doc_status.get_docs_paginated(
+                status_filter=status_enum,
+                page=page,
+                page_size=page_size,
+            )
+            
+            # Get full document content for each
+            documents = []
+            for doc_id, doc_status_obj in docs_list:
+                # Get full document content
+                doc_content = await full_docs.get_by_id(doc_id)
+                
+                documents.append({
+                    "id": doc_id,
+                    "content_preview": doc_content.get("content", "")[:200] if doc_content else "",
+                    "status": doc_status_obj.status.value if hasattr(doc_status_obj.status, "value") else str(doc_status_obj.status),
+                    "file_path": getattr(doc_status_obj, "file_path", ""),
+                    "content_summary": getattr(doc_status_obj, "content_summary", ""),
+                    "content_length": getattr(doc_status_obj, "content_length", 0),
+                    "chunks_count": getattr(doc_status_obj, "chunks_count", 0),
+                    "created_at": getattr(doc_status_obj, "created_at", ""),
+                    "updated_at": getattr(doc_status_obj, "updated_at", ""),
+                    "track_id": getattr(doc_status_obj, "track_id", ""),
+                })
+            
+            return {
+                "workspace": effective_workspace,
+                "documents": documents,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+        except Exception as e:
+            logger.error(f"Failed to list documents for workspace {effective_workspace}: {e}")
+            raise
+
+    async def get_document(
+        self,
+        doc_id: str,
+        workspace: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Get a specific document by ID.
+        
+        Args:
+            doc_id: Document identifier
+            workspace: Workspace identifier. If None, uses default workspace.
+            
+        Returns:
+            Dictionary with complete document information
+        """
+        # Validate workspace exists (prevents auto-creation)
+        effective_workspace = await self._validate_workspace_exists(workspace)
+        
+        # Ensure storages are initialized
+        await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+        
+        # Get workspace-specific storages
+        storages = self._get_storages_for_workspace(effective_workspace, require_existing=True)
+        doc_status = storages["doc_status"]
+        full_docs = storages["full_docs"]
+        
+        # Get document content and status
+        doc_content = await full_docs.get_by_id(doc_id)
+        doc_status_data = await doc_status.get_by_id(doc_id)
+        
+        if not doc_content and not doc_status_data:
+            raise ValueError(f"Document {doc_id} not found in workspace {effective_workspace}")
+        
+        # Combine data
+        result = {
+            "id": doc_id,
+            "workspace": effective_workspace,
+            "content": doc_content.get("content", "") if doc_content else "",
+            "file_path": doc_content.get("file_path", "") if doc_content else "",
+        }
+        
+        if doc_status_data:
+            if isinstance(doc_status_data, dict):
+                result.update({
+                    "status": doc_status_data.get("status", "unknown"),
+                    "content_summary": doc_status_data.get("content_summary", ""),
+                    "content_length": doc_status_data.get("content_length", 0),
+                    "chunks_count": doc_status_data.get("chunks_count", 0),
+                    "chunks_list": doc_status_data.get("chunks_list", []),
+                    "created_at": doc_status_data.get("created_at", ""),
+                    "updated_at": doc_status_data.get("updated_at", ""),
+                    "track_id": doc_status_data.get("track_id", ""),
+                    "error_msg": doc_status_data.get("error_msg", ""),
+                })
+            else:
+                # DocProcessingStatus object
+                result.update({
+                    "status": doc_status_data.status.value if hasattr(doc_status_data.status, "value") else str(doc_status_data.status),
+                    "content_summary": getattr(doc_status_data, "content_summary", ""),
+                    "content_length": getattr(doc_status_data, "content_length", 0),
+                    "chunks_count": getattr(doc_status_data, "chunks_count", 0),
+                    "chunks_list": getattr(doc_status_data, "chunks_list", []),
+                    "created_at": getattr(doc_status_data, "created_at", ""),
+                    "updated_at": getattr(doc_status_data, "updated_at", ""),
+                    "track_id": getattr(doc_status_data, "track_id", ""),
+                    "error_msg": getattr(doc_status_data, "error_msg", ""),
+                })
+        
+        return result
+
+    async def delete_workspace(self, workspace: str, confirm: bool = False) -> dict[str, Any]:
+        """
+        Delete an entire workspace and all its data.
+        
+        WARNING: This operation is irreversible and will delete all documents,
+        entities, relationships, and chunks in the workspace.
+        
+        Args:
+            workspace: Workspace identifier to delete
+            confirm: Must be True to confirm deletion (safety measure)
+            
+        Returns:
+            Dictionary with deletion results
+        """
+        if not confirm:
+            raise ValueError("Workspace deletion requires confirm=True for safety")
+        
+        if not workspace:
+            raise ValueError("Workspace must be specified")
+        
+        # Ensure workspace exists before getting storages (prevent auto-creation)
+        if not await self.workspace_exists(workspace):
+            raise ValueError(
+                f"Workspace '{workspace}' does not exist. "
+                "Please create it first using POST /workspaces/"
+            )
+        
+        # Get workspace-specific storages
+        storages = self._get_storages_for_workspace(workspace, require_existing=True)
+        
+        deletion_results = {
+            "workspace": workspace,
+            "deleted": False,
+            "errors": [],
+            "details": {},
+        }
+        
+        try:
+            # Delete all documents (this will cascade to chunks, entities, relations)
+            doc_status = storages["doc_status"]
+            
+            # Get all documents by querying each status
+            try:
+                from lightrag.kg.doc_status import DocStatus as DocStatusEnum
+                all_doc_ids = set()
+                
+                # Get documents from each status
+                for status in DocStatusEnum:
+                    try:
+                        docs = await doc_status.get_docs_by_status(status)
+                        all_doc_ids.update(docs.keys())
+                    except Exception as e:
+                        logger.warning(f"Failed to get documents with status {status}: {e}")
+                
+                doc_ids = list(all_doc_ids)
+                
+                # Delete each document
+                deleted_count = 0
+                for doc_id in doc_ids:
+                    try:
+                        await self.adelete_by_doc_id(doc_id, workspace=workspace)
+                        deleted_count += 1
+                    except Exception as e:
+                        deletion_results["errors"].append(f"Failed to delete document {doc_id}: {e}")
+                
+                deletion_results["details"]["documents_deleted"] = deleted_count
+            except Exception as e:
+                deletion_results["errors"].append(f"Failed to get documents: {e}")
+            
+            # Clear pipeline status
+            try:
+                from lightrag.kg.shared_storage import get_namespace_data, get_namespace_lock
+                pipeline_status = await get_namespace_data("pipeline_status", workspace=workspace)
+                pipeline_status_lock = get_namespace_lock("pipeline_status", workspace=workspace)
+                
+                async with pipeline_status_lock:
+                    pipeline_status.clear()
+                    pipeline_status.update({
+                        "busy": False,
+                        "job_name": "",
+                        "docs": 0,
+                        "batchs": 0,
+                        "cur_batch": 0,
+                        "request_pending": False,
+                        "cancellation_requested": False,
+                        "latest_message": f"Workspace {workspace} deleted",
+                        "history_messages": [],
+                    })
+            except Exception as e:
+                deletion_results["errors"].append(f"Failed to clear pipeline status: {e}")
+            
+            # Remove from storage registry
+            if workspace in self._storage_registry:
+                del self._storage_registry[workspace]
+            
+            deletion_results["deleted"] = True
+            deletion_results["message"] = f"Workspace {workspace} deleted successfully"
+            
+        except Exception as e:
+            deletion_results["errors"].append(f"Failed to delete workspace: {e}")
+            logger.error(f"Error deleting workspace {workspace}: {e}")
+            raise
+        
+        return deletion_results
 
     async def get_entity_info(
         self, entity_name: str, include_vector_data: bool = False

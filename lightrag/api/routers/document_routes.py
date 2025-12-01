@@ -19,6 +19,8 @@ from fastapi import (
     File,
     HTTPException,
     UploadFile,
+    Request,
+    Header,
 )
 from pydantic import BaseModel, Field, field_validator
 
@@ -1185,7 +1187,7 @@ def _extract_xlsx(file_bytes: bytes) -> str:
 
 
 async def pipeline_enqueue_file(
-    rag: LightRAG, file_path: Path, track_id: str = None
+    rag: LightRAG, file_path: Path, track_id: str = None, workspace: Optional[str] = None
 ) -> tuple[bool, str]:
     """Add a file to the queue for processing
 
@@ -1193,6 +1195,7 @@ async def pipeline_enqueue_file(
         rag: LightRAG instance
         file_path: Path to the saved file
         track_id: Optional tracking ID, if not provided will be generated
+        workspace: Optional workspace identifier
     Returns:
         tuple: (success: bool, track_id: str)
     """
@@ -1225,7 +1228,7 @@ async def pipeline_enqueue_file(
                     "file_size": file_size,
                 }
             ]
-            await rag.apipeline_enqueue_error_documents(error_files, track_id)
+            await rag.apipeline_enqueue_error_documents(error_files, track_id, workspace=workspace)
             logger.error(
                 f"[File Extraction]Permission denied reading file: {file_path.name}"
             )
@@ -1239,7 +1242,7 @@ async def pipeline_enqueue_file(
                     "file_size": file_size,
                 }
             ]
-            await rag.apipeline_enqueue_error_documents(error_files, track_id)
+            await rag.apipeline_enqueue_error_documents(error_files, track_id, workspace=workspace)
             logger.error(f"[File Extraction]File not found: {file_path.name}")
             return False, track_id
         except Exception as e:
@@ -1251,7 +1254,7 @@ async def pipeline_enqueue_file(
                     "file_size": file_size,
                 }
             ]
-            await rag.apipeline_enqueue_error_documents(error_files, track_id)
+            await rag.apipeline_enqueue_error_documents(error_files, track_id, workspace=workspace)
             logger.error(
                 f"[File Extraction]Error reading file {file_path.name}: {str(e)}"
             )
@@ -1310,7 +1313,7 @@ async def pipeline_enqueue_file(
                                 }
                             ]
                             await rag.apipeline_enqueue_error_documents(
-                                error_files, track_id
+                                error_files, track_id, workspace=workspace
                             )
                             logger.error(
                                 f"[File Extraction]Empty content in file: {file_path.name}"
@@ -1328,7 +1331,7 @@ async def pipeline_enqueue_file(
                                 }
                             ]
                             await rag.apipeline_enqueue_error_documents(
-                                error_files, track_id
+                                error_files, track_id, workspace=workspace
                             )
                             logger.error(
                                 f"[File Extraction]File {file_path.name} appears to contain binary data representation instead of text"
@@ -1345,7 +1348,7 @@ async def pipeline_enqueue_file(
                             }
                         ]
                         await rag.apipeline_enqueue_error_documents(
-                            error_files, track_id
+                            error_files, track_id, workspace=workspace
                         )
                         logger.error(
                             f"[File Extraction]File {file_path.name} is not valid UTF-8 encoded text. Please convert it to UTF-8 before processing."
@@ -1386,7 +1389,7 @@ async def pipeline_enqueue_file(
                             }
                         ]
                         await rag.apipeline_enqueue_error_documents(
-                            error_files, track_id
+                            error_files, track_id, workspace=workspace
                         )
                         logger.error(
                             f"[File Extraction]Error processing PDF {file_path.name}: {str(e)}"
@@ -1423,7 +1426,7 @@ async def pipeline_enqueue_file(
                             }
                         ]
                         await rag.apipeline_enqueue_error_documents(
-                            error_files, track_id
+                            error_files, track_id, workspace=workspace
                         )
                         logger.error(
                             f"[File Extraction]Error processing DOCX {file_path.name}: {str(e)}"
@@ -1460,7 +1463,7 @@ async def pipeline_enqueue_file(
                             }
                         ]
                         await rag.apipeline_enqueue_error_documents(
-                            error_files, track_id
+                            error_files, track_id, workspace=workspace
                         )
                         logger.error(
                             f"[File Extraction]Error processing PPTX {file_path.name}: {str(e)}"
@@ -1497,7 +1500,7 @@ async def pipeline_enqueue_file(
                             }
                         ]
                         await rag.apipeline_enqueue_error_documents(
-                            error_files, track_id
+                            error_files, track_id, workspace=workspace
                         )
                         logger.error(
                             f"[File Extraction]Error processing XLSX {file_path.name}: {str(e)}"
@@ -1513,7 +1516,7 @@ async def pipeline_enqueue_file(
                             "file_size": file_size,
                         }
                     ]
-                    await rag.apipeline_enqueue_error_documents(error_files, track_id)
+                    await rag.apipeline_enqueue_error_documents(error_files, track_id, workspace=workspace)
                     logger.error(
                         f"[File Extraction]Unsupported file type: {file_path.name} (extension {ext})"
                     )
@@ -1528,7 +1531,7 @@ async def pipeline_enqueue_file(
                     "file_size": file_size,
                 }
             ]
-            await rag.apipeline_enqueue_error_documents(error_files, track_id)
+            await rag.apipeline_enqueue_error_documents(error_files, track_id, workspace=workspace)
             logger.error(
                 f"[File Extraction]Unexpected error during {file_path.name} extracting: {str(e)}"
             )
@@ -1546,7 +1549,7 @@ async def pipeline_enqueue_file(
                         "file_size": file_size,
                     }
                 ]
-                await rag.apipeline_enqueue_error_documents(error_files, track_id)
+                await rag.apipeline_enqueue_error_documents(error_files, track_id, workspace=workspace)
                 logger.warning(
                     f"[File Extraction]File contains only whitespace characters: {file_path.name}"
                 )
@@ -1554,7 +1557,7 @@ async def pipeline_enqueue_file(
 
             try:
                 await rag.apipeline_enqueue_documents(
-                    content, file_paths=file_path.name, track_id=track_id
+                    content, file_paths=file_path.name, track_id=track_id, workspace=workspace
                 )
 
                 logger.info(
@@ -1595,7 +1598,7 @@ async def pipeline_enqueue_file(
                         "file_size": file_size,
                     }
                 ]
-                await rag.apipeline_enqueue_error_documents(error_files, track_id)
+                await rag.apipeline_enqueue_error_documents(error_files, track_id, workspace=workspace)
                 logger.error(f"Error enqueueing document {file_path.name}: {str(e)}")
                 return False, track_id
         else:
@@ -1607,7 +1610,7 @@ async def pipeline_enqueue_file(
                     "file_size": file_size,
                 }
             ]
-            await rag.apipeline_enqueue_error_documents(error_files, track_id)
+            await rag.apipeline_enqueue_error_documents(error_files, track_id, workspace=workspace)
             logger.error(f"No content extracted from file: {file_path.name}")
             return False, track_id
 
@@ -1626,7 +1629,7 @@ async def pipeline_enqueue_file(
                 "file_size": file_size,
             }
         ]
-        await rag.apipeline_enqueue_error_documents(error_files, track_id)
+        await rag.apipeline_enqueue_error_documents(error_files, track_id, workspace=workspace)
         logger.error(f"Enqueuing file {file_path.name} error: {str(e)}")
         logger.error(traceback.format_exc())
         return False, track_id
@@ -1638,20 +1641,21 @@ async def pipeline_enqueue_file(
                 logger.error(f"Error deleting file {file_path}: {str(e)}")
 
 
-async def pipeline_index_file(rag: LightRAG, file_path: Path, track_id: str = None):
+async def pipeline_index_file(rag: LightRAG, file_path: Path, track_id: str = None, workspace: Optional[str] = None):
     """Index a file with track_id
 
     Args:
         rag: LightRAG instance
         file_path: Path to the saved file
         track_id: Optional tracking ID
+        workspace: Optional workspace identifier
     """
     try:
         success, returned_track_id = await pipeline_enqueue_file(
-            rag, file_path, track_id
+            rag, file_path, track_id, workspace
         )
         if success:
-            await rag.apipeline_process_enqueue_documents()
+            await rag.apipeline_process_enqueue_documents(workspace=workspace)
 
     except Exception as e:
         logger.error(f"Error indexing file {file_path.name}: {str(e)}")
@@ -1697,6 +1701,7 @@ async def pipeline_index_texts(
     texts: List[str],
     file_sources: List[str] = None,
     track_id: str = None,
+    workspace: Optional[str] = None,
 ):
     """Index a list of texts with track_id
 
@@ -1705,6 +1710,7 @@ async def pipeline_index_texts(
         texts: The texts to index
         file_sources: Sources of the texts
         track_id: Optional tracking ID
+        workspace: Optional workspace identifier
     """
     if not texts:
         return
@@ -1715,7 +1721,7 @@ async def pipeline_index_texts(
                 for _ in range(len(file_sources), len(texts))
             ]
     await rag.apipeline_enqueue_documents(
-        input=texts, file_paths=file_sources, track_id=track_id
+        input=texts, file_paths=file_sources, track_id=track_id, workspace=workspace
     )
     await rag.apipeline_process_enqueue_documents()
 
@@ -1785,18 +1791,22 @@ async def background_delete_documents(
     doc_ids: List[str],
     delete_file: bool = False,
     delete_llm_cache: bool = False,
+    workspace: Optional[str] = None,
 ):
     """Background task to delete multiple documents"""
     from lightrag.kg.shared_storage import (
         get_namespace_data,
         get_namespace_lock,
     )
+    
+    # Determine effective workspace
+    effective_workspace = workspace or rag.workspace
 
     pipeline_status = await get_namespace_data(
-        "pipeline_status", workspace=rag.workspace
+        "pipeline_status", workspace=effective_workspace
     )
     pipeline_status_lock = get_namespace_lock(
-        "pipeline_status", workspace=rag.workspace
+        "pipeline_status", workspace=effective_workspace
     )
 
     total_docs = len(doc_ids)
@@ -1854,7 +1864,7 @@ async def background_delete_documents(
             file_path = "#"
             try:
                 result = await rag.adelete_by_doc_id(
-                    doc_id, delete_llm_cache=delete_llm_cache
+                    doc_id, workspace=effective_workspace, delete_llm_cache=delete_llm_cache
                 )
                 file_path = (
                     getattr(result, "file_path", "-") if "result" in locals() else "-"
@@ -2029,10 +2039,31 @@ async def background_delete_documents(
                 logger.error(f"Error processing pending documents after deletion: {e}")
 
 
+def get_workspace_from_header(
+    lightrag_workspace: Optional[str] = Header(None, alias="LIGHTRAG-WORKSPACE")
+) -> Optional[str]:
+    """
+    Extract workspace from HTTP request header.
+    
+    Args:
+        lightrag_workspace: Workspace identifier from LIGHTRAG-WORKSPACE header
+        
+    Returns:
+        Workspace identifier or None
+    """
+    if lightrag_workspace:
+        return lightrag_workspace.strip() or None
+    return None
+
+
 def create_document_routes(
     rag: LightRAG, doc_manager: DocumentManager, api_key: Optional[str] = None
 ):
     # Create combined auth dependency for document routes
+    from lightrag.api.utils_api import get_validated_workspace_dependency
+    
+    # Create workspace validation dependency
+    validated_workspace = get_validated_workspace_dependency(rag)
     combined_auth = get_combined_auth_dependency(api_key)
 
     @router.post(
@@ -2064,7 +2095,9 @@ def create_document_routes(
         "/upload", response_model=InsertResponse, dependencies=[Depends(combined_auth)]
     )
     async def upload_to_input_dir(
-        background_tasks: BackgroundTasks, file: UploadFile = File(...)
+        background_tasks: BackgroundTasks,
+        file: UploadFile = File(...),
+        workspace: str = Depends(validated_workspace),
     ):
         """
         Upload a file to the input directory and index it.
@@ -2076,6 +2109,7 @@ def create_document_routes(
         Args:
             background_tasks: FastAPI BackgroundTasks for async processing
             file (UploadFile): The file to be uploaded. It must have an allowed extension.
+            workspace: Validated workspace identifier (from dependency)
 
         Returns:
             InsertResponse: A response object containing the upload status and a message.
@@ -2085,6 +2119,11 @@ def create_document_routes(
             HTTPException: If the file type is not supported (400) or other errors occur (500).
         """
         try:
+            # Ensure storages are initialized (workspace is already validated by dependency)
+            await rag.initialize_storages(workspace=workspace, require_existing=True)
+            storages = rag._get_storages_for_workspace(workspace, require_existing=True)
+            doc_status_storage = storages.get("doc_status")
+            
             # Sanitize filename to prevent Path Traversal attacks
             safe_filename = sanitize_filename(file.filename, doc_manager.input_dir)
 
@@ -2094,16 +2133,17 @@ def create_document_routes(
                     detail=f"Unsupported file type. Supported types: {doc_manager.supported_extensions}",
                 )
 
-            # Check if filename already exists in doc_status storage
-            existing_doc_data = await rag.doc_status.get_doc_by_file_path(safe_filename)
-            if existing_doc_data:
-                # Get document status information for error message
-                status = existing_doc_data.get("status", "unknown")
-                return InsertResponse(
-                    status="duplicated",
-                    message=f"File '{safe_filename}' already exists in document storage (Status: {status}).",
-                    track_id="",
-                )
+            # Check if filename already exists in workspace-specific doc_status storage
+            if doc_status_storage:
+                existing_doc_data = await doc_status_storage.get_doc_by_file_path(safe_filename)
+                if existing_doc_data:
+                    # Get document status information for error message
+                    status = existing_doc_data.get("status", "unknown")
+                    return InsertResponse(
+                        status="duplicated",
+                        message=f"File '{safe_filename}' already exists in document storage (Status: {status}).",
+                        track_id="",
+                    )
 
             file_path = doc_manager.input_dir / safe_filename
             # Check if file already exists in file system
@@ -2120,7 +2160,8 @@ def create_document_routes(
             track_id = generate_track_id("upload")
 
             # Add to background tasks and get track_id
-            background_tasks.add_task(pipeline_index_file, rag, file_path, track_id)
+            # Pass workspace to pipeline_index_file
+            background_tasks.add_task(pipeline_index_file, rag, file_path, track_id, workspace)
 
             return InsertResponse(
                 status="success",
@@ -2137,7 +2178,9 @@ def create_document_routes(
         "/text", response_model=InsertResponse, dependencies=[Depends(combined_auth)]
     )
     async def insert_text(
-        request: InsertTextRequest, background_tasks: BackgroundTasks
+        request: InsertTextRequest,
+        background_tasks: BackgroundTasks,
+        workspace: str = Depends(validated_workspace),
     ):
         """
         Insert text into the RAG system.
@@ -2148,6 +2191,7 @@ def create_document_routes(
         Args:
             request (InsertTextRequest): The request body containing the text to be inserted.
             background_tasks: FastAPI BackgroundTasks for async processing
+            workspace: Validated workspace identifier (from dependency)
 
         Returns:
             InsertResponse: A response object containing the status of the operation.
@@ -2156,23 +2200,32 @@ def create_document_routes(
             HTTPException: If an error occurs during text processing (500).
         """
         try:
-            # Check if file_source already exists in doc_status storage
+            # Ensure storages are initialized (workspace is already validated by dependency)
+            await rag.initialize_storages(workspace=workspace, require_existing=True)
+            storages = rag._get_storages_for_workspace(workspace, require_existing=True)
+            doc_status_storage = storages.get("doc_status")
+            # Ensure doc_status is initialized before use
+            if doc_status_storage and hasattr(doc_status_storage, '_storage_lock') and doc_status_storage._storage_lock is None:
+                await doc_status_storage.initialize()
+            
+            # Check if file_source already exists in workspace-specific doc_status storage
             if (
                 request.file_source
                 and request.file_source.strip()
                 and request.file_source != "unknown_source"
             ):
-                existing_doc_data = await rag.doc_status.get_doc_by_file_path(
-                    request.file_source
-                )
-                if existing_doc_data:
-                    # Get document status information for error message
-                    status = existing_doc_data.get("status", "unknown")
-                    return InsertResponse(
-                        status="duplicated",
-                        message=f"File source '{request.file_source}' already exists in document storage (Status: {status}).",
-                        track_id="",
+                if doc_status_storage and hasattr(doc_status_storage, '_storage_lock') and doc_status_storage._storage_lock is not None:
+                    existing_doc_data = await doc_status_storage.get_doc_by_file_path(
+                        request.file_source
                     )
+                    if existing_doc_data:
+                        # Get document status information for error message
+                        status = existing_doc_data.get("status", "unknown")
+                        return InsertResponse(
+                            status="duplicated",
+                            message=f"File source '{request.file_source}' already exists in document storage (Status: {status}).",
+                            track_id="",
+                        )
 
             # Generate track_id for text insertion
             track_id = generate_track_id("insert")
@@ -2183,6 +2236,7 @@ def create_document_routes(
                 [request.text],
                 file_sources=[request.file_source],
                 track_id=track_id,
+                workspace=workspace,
             )
 
             return InsertResponse(
@@ -2201,7 +2255,9 @@ def create_document_routes(
         dependencies=[Depends(combined_auth)],
     )
     async def insert_texts(
-        request: InsertTextsRequest, background_tasks: BackgroundTasks
+        request: InsertTextsRequest,
+        background_tasks: BackgroundTasks,
+        workspace: str = Depends(validated_workspace),
     ):
         """
         Insert multiple texts into the RAG system.
@@ -2212,6 +2268,7 @@ def create_document_routes(
         Args:
             request (InsertTextsRequest): The request body containing the list of texts.
             background_tasks: FastAPI BackgroundTasks for async processing
+            workspace: Validated workspace identifier (from dependency)
 
         Returns:
             InsertResponse: A response object containing the status of the operation.
@@ -2220,7 +2277,12 @@ def create_document_routes(
             HTTPException: If an error occurs during text processing (500).
         """
         try:
-            # Check if any file_sources already exist in doc_status storage
+            # Ensure storages are initialized (workspace is already validated by dependency)
+            await rag.initialize_storages(workspace=workspace, require_existing=True)
+            storages = rag._get_storages_for_workspace(workspace, require_existing=True)
+            doc_status_storage = storages.get("doc_status")
+            
+            # Check if any file_sources already exist in workspace-specific doc_status storage
             if request.file_sources:
                 for file_source in request.file_sources:
                     if (
@@ -2228,17 +2290,18 @@ def create_document_routes(
                         and file_source.strip()
                         and file_source != "unknown_source"
                     ):
-                        existing_doc_data = await rag.doc_status.get_doc_by_file_path(
-                            file_source
-                        )
-                        if existing_doc_data:
-                            # Get document status information for error message
-                            status = existing_doc_data.get("status", "unknown")
-                            return InsertResponse(
-                                status="duplicated",
-                                message=f"File source '{file_source}' already exists in document storage (Status: {status}).",
-                                track_id="",
+                        if doc_status_storage:
+                            existing_doc_data = await doc_status_storage.get_doc_by_file_path(
+                                file_source
                             )
+                            if existing_doc_data:
+                                # Get document status information for error message
+                                status = existing_doc_data.get("status", "unknown")
+                                return InsertResponse(
+                                    status="duplicated",
+                                    message=f"File source '{file_source}' already exists in document storage (Status: {status}).",
+                                    track_id="",
+                                )
 
             # Generate track_id for texts insertion
             track_id = generate_track_id("insert")
@@ -2249,6 +2312,7 @@ def create_document_routes(
                 request.texts,
                 file_sources=request.file_sources,
                 track_id=track_id,
+                workspace=workspace,
             )
 
             return InsertResponse(
@@ -2675,6 +2739,7 @@ def create_document_routes(
     async def delete_document(
         delete_request: DeleteDocRequest,
         background_tasks: BackgroundTasks,
+        workspace: str = Depends(validated_workspace),
     ) -> DeleteDocByIdResponse:
         """
         Delete documents and all their associated data by their IDs using background processing.
@@ -2731,6 +2796,7 @@ def create_document_routes(
                 doc_ids,
                 delete_request.delete_file,
                 delete_request.delete_llm_cache,
+                workspace,
             )
 
             return DeleteDocByIdResponse(
@@ -2933,6 +2999,7 @@ def create_document_routes(
     )
     async def get_documents_paginated(
         request: DocumentsRequest,
+        workspace: str = Depends(validated_workspace),
     ) -> PaginatedDocsResponse:
         """
         Get documents with pagination support.
@@ -2954,15 +3021,33 @@ def create_document_routes(
             HTTPException: If an error occurs while retrieving documents (500).
         """
         try:
+            # Workspace is already validated by dependency
+            # Ensure storages are initialized
+            await rag.initialize_storages(workspace=workspace, require_existing=True)
+            
+            # Get workspace-specific storage first
+            storages = rag._get_storages_for_workspace(workspace, require_existing=True)
+            doc_status_storage = storages.get("doc_status")
+            
+            if not doc_status_storage:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to get document status storage for workspace: {workspace}"
+                )
+            
+            # Ensure storage is initialized (this sets _storage_lock)
+            if not hasattr(doc_status_storage, '_storage_lock') or doc_status_storage._storage_lock is None:
+                await doc_status_storage.initialize()
+            
             # Get paginated documents and status counts in parallel
-            docs_task = rag.doc_status.get_docs_paginated(
+            docs_task = doc_status_storage.get_docs_paginated(
                 status_filter=request.status_filter,
                 page=request.page,
                 page_size=request.page_size,
                 sort_field=request.sort_field,
                 sort_direction=request.sort_direction,
             )
-            status_counts_task = rag.doc_status.get_all_status_counts()
+            status_counts_task = doc_status_storage.get_all_status_counts()
 
             # Execute both queries in parallel
             (documents_with_ids, total_count), status_counts = await asyncio.gather(

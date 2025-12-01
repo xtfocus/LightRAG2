@@ -1045,6 +1045,10 @@ def create_app(args):
     app.include_router(create_query_routes(rag, api_key, args.top_k))
     app.include_router(create_graph_routes(rag, api_key))
 
+    # Add workspace management routes
+    from lightrag.api.routers.workspace_routes import create_workspace_routes
+    app.include_router(create_workspace_routes(rag, api_key))
+
     # Add Ollama API routes
     ollama_api = OllamaAPI(rag, top_k=args.top_k, api_key=api_key)
     app.include_router(ollama_api.router, prefix="/api")
@@ -1181,9 +1185,22 @@ def create_app(args):
             default_workspace = get_default_workspace()
             if workspace is None:
                 workspace = default_workspace
-            pipeline_status = await get_namespace_data(
-                "pipeline_status", workspace=workspace
-            )
+            
+            # Initialize pipeline_status if it doesn't exist
+            from lightrag.kg.shared_storage import initialize_pipeline_status, get_namespace_data
+            try:
+                pipeline_status = await get_namespace_data(
+                    "pipeline_status", workspace=workspace
+                )
+            except Exception:
+                # Pipeline status not initialized, initialize it now
+                if workspace:
+                    await initialize_pipeline_status(workspace=workspace)
+                    pipeline_status = await get_namespace_data(
+                        "pipeline_status", workspace=workspace
+                    )
+                else:
+                    pipeline_status = {}
 
             if not auth_configured:
                 auth_mode = "disabled"

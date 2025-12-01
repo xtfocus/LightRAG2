@@ -33,6 +33,24 @@
     "authDisabled": "Authentication is disabled. Using login free mode.",
     "guestMode": "Login Free"
   },
+  "workspace": {
+    "default": "Default",
+    "select": "Select workspace",
+    "loading": "Loading...",
+    "noWorkspaces": "No workspaces",
+    "info": "Workspace Info",
+    "loadingInfo": "Loading workspace information...",
+    "name": "Workspace",
+    "documents": "Documents",
+    "entities": "Entities",
+    "relations": "Relations",
+    "chunks": "Chunks",
+    "pipeline": "Pipeline",
+    "busy": "Busy",
+    "idle": "Idle",
+    "noInfo": "No workspace information available",
+    "refresh": "Refresh workspaces"
+  },
   "common": {
     "cancel": "Cancel",
     "save": "Save",

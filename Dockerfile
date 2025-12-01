@@ -52,7 +52,8 @@ COPY lightrag/ ./lightrag/
 # Include pre-built frontend assets from the previous stage
 COPY --from=frontend-builder /app/lightrag/api/webui ./lightrag/api/webui
 
-# Sync project in non-editable mode and ensure pip is available for runtime installs
+# Install the project in non-editable mode (dependencies already installed above)
+# uv sync will be fast since dependencies are cached and already installed
 RUN --mount=type=cache,target=/root/.local/share/uv \
     uv sync --frozen --no-dev --extra api --extra offline --no-editable \
     && /app/.venv/bin/python -m ensurepip --upgrade
@@ -77,18 +78,15 @@ ENV UV_SYSTEM_PYTHON=1
 COPY --from=builder /root/.local /root/.local
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/lightrag ./lightrag
-COPY pyproject.toml .
-COPY setup.py .
-COPY uv.lock .
+# Note: pyproject.toml, setup.py, and uv.lock not needed in final stage
+# since dependencies are already installed and copied via .venv
 
 # Ensure the installed scripts are on PATH
 ENV PATH=/app/.venv/bin:/root/.local/bin:$PATH
 
-# Install dependencies with uv sync (uses locked versions from uv.lock)
-# And ensure pip is available for runtime installs
-RUN --mount=type=cache,target=/root/.local/share/uv \
-    uv sync --frozen --no-dev --extra api --extra offline --no-editable \
-    && /app/.venv/bin/python -m ensurepip --upgrade
+# Note: Dependencies are already installed in the builder stage and copied via .venv
+# No need to reinstall here - just ensure pip is available for runtime installs
+RUN /app/.venv/bin/python -m ensurepip --upgrade
 
 # Create persistent data directories AFTER package installation
 RUN mkdir -p /app/data/rag_storage /app/data/inputs /app/data/tiktoken

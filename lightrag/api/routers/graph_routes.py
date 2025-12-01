@@ -4,13 +4,30 @@ This module contains all graph-related routes for the LightRAG API.
 
 from typing import Optional, Dict, Any
 import traceback
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Header
 from pydantic import BaseModel, Field
 
 from lightrag.utils import logger
-from ..utils_api import get_combined_auth_dependency
+from ..utils_api import get_combined_auth_dependency, get_validated_workspace_dependency
 
 router = APIRouter(tags=["graph"])
+
+
+def get_workspace_from_header(
+    lightrag_workspace: Optional[str] = Header(None, alias="LIGHTRAG-WORKSPACE")
+) -> Optional[str]:
+    """
+    Extract workspace from HTTP request header.
+    
+    Args:
+        lightrag_workspace: Workspace identifier from LIGHTRAG-WORKSPACE header
+        
+    Returns:
+        Workspace identifier or None
+    """
+    if lightrag_workspace:
+        return lightrag_workspace.strip() or None
+    return None
 
 
 class EntityUpdateRequest(BaseModel):
@@ -88,17 +105,38 @@ class RelationCreateRequest(BaseModel):
 
 def create_graph_routes(rag, api_key: Optional[str] = None):
     combined_auth = get_combined_auth_dependency(api_key)
+    validated_workspace = get_validated_workspace_dependency(rag)
 
     @router.get("/graph/label/list", dependencies=[Depends(combined_auth)])
-    async def get_graph_labels():
+    async def get_graph_labels(
+        workspace: str = Depends(validated_workspace),
+    ):
         """
         Get all graph labels
+
+        Args:
+            workspace: Workspace identifier from LIGHTRAG-WORKSPACE header
 
         Returns:
             List[str]: List of graph labels
         """
         try:
-            return await rag.get_graph_labels()
+            # Use workspace-specific graph storage
+            effective_workspace = workspace or rag.workspace
+            # Workspace is already validated by dependency
+            await rag.initialize_storages(workspace=workspace, require_existing=True)
+            storages = rag._get_storages_for_workspace(workspace, require_existing=True)
+            graph_storage = storages.get("chunk_entity_relation_graph")
+            
+            if not graph_storage:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Graph storage not available for workspace: {effective_workspace}"
+                )
+            
+            return await graph_storage.get_all_labels()
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error getting graph labels: {str(e)}")
             logger.error(traceback.format_exc())
@@ -111,18 +149,35 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
         limit: int = Query(
             300, description="Maximum number of popular labels to return", ge=1, le=1000
         ),
+        workspace: str = Depends(validated_workspace),
     ):
         """
         Get popular labels by node degree (most connected entities)
 
         Args:
             limit (int): Maximum number of labels to return (default: 300, max: 1000)
+            workspace: Workspace identifier from LIGHTRAG-WORKSPACE header
 
         Returns:
             List[str]: List of popular labels sorted by degree (highest first)
         """
         try:
-            return await rag.chunk_entity_relation_graph.get_popular_labels(limit)
+            # Use workspace-specific graph storage
+            effective_workspace = workspace or rag.workspace
+            # Workspace is already validated by dependency
+            await rag.initialize_storages(workspace=workspace, require_existing=True)
+            storages = rag._get_storages_for_workspace(workspace, require_existing=True)
+            graph_storage = storages.get("chunk_entity_relation_graph")
+            
+            if not graph_storage:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Graph storage not available for workspace: {effective_workspace}"
+                )
+            
+            return await graph_storage.get_popular_labels(limit)
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error getting popular labels: {str(e)}")
             logger.error(traceback.format_exc())
@@ -136,6 +191,7 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
         limit: int = Query(
             50, description="Maximum number of search results to return", ge=1, le=100
         ),
+        workspace: str = Depends(validated_workspace),
     ):
         """
         Search labels with fuzzy matching
@@ -143,12 +199,28 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
         Args:
             q (str): Search query string
             limit (int): Maximum number of results to return (default: 50, max: 100)
+            workspace: Workspace identifier from LIGHTRAG-WORKSPACE header
 
         Returns:
             List[str]: List of matching labels sorted by relevance
         """
         try:
-            return await rag.chunk_entity_relation_graph.search_labels(q, limit)
+            # Use workspace-specific graph storage
+            effective_workspace = workspace or rag.workspace
+            # Workspace is already validated by dependency
+            await rag.initialize_storages(workspace=workspace, require_existing=True)
+            storages = rag._get_storages_for_workspace(workspace, require_existing=True)
+            graph_storage = storages.get("chunk_entity_relation_graph")
+            
+            if not graph_storage:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Graph storage not available for workspace: {effective_workspace}"
+                )
+            
+            return await graph_storage.search_labels(q, limit)
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error searching labels with query '{q}': {str(e)}")
             logger.error(traceback.format_exc())
@@ -161,6 +233,7 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
         label: str = Query(..., description="Label to get knowledge graph for"),
         max_depth: int = Query(3, description="Maximum depth of graph", ge=1),
         max_nodes: int = Query(1000, description="Maximum nodes to return", ge=1),
+        workspace: str = Depends(validated_workspace),
     ):
         """
         Retrieve a connected subgraph of nodes where the label includes the specified label.
@@ -172,6 +245,7 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
             label (str): Label of the starting node
             max_depth (int, optional): Maximum depth of the subgraph,Defaults to 3
             max_nodes: Maxiumu nodes to return
+            workspace: Workspace identifier from LIGHTRAG-WORKSPACE header
 
         Returns:
             Dict[str, List[str]]: Knowledge graph for label
@@ -182,11 +256,26 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
                 f"get_knowledge_graph called with label: '{label}' (length: {len(label)}, repr: {repr(label)})"
             )
 
-            return await rag.get_knowledge_graph(
+            # Use workspace-specific graph storage
+            effective_workspace = workspace or rag.workspace
+            # Workspace is already validated by dependency
+            await rag.initialize_storages(workspace=workspace, require_existing=True)
+            storages = rag._get_storages_for_workspace(workspace, require_existing=True)
+            graph_storage = storages.get("chunk_entity_relation_graph")
+            
+            if not graph_storage:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Graph storage not available for workspace: {effective_workspace}"
+                )
+            
+            return await graph_storage.get_knowledge_graph(
                 node_label=label,
                 max_depth=max_depth,
                 max_nodes=max_nodes,
             )
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error getting knowledge graph for label '{label}': {str(e)}")
             logger.error(traceback.format_exc())
@@ -197,19 +286,36 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
     @router.get("/graph/entity/exists", dependencies=[Depends(combined_auth)])
     async def check_entity_exists(
         name: str = Query(..., description="Entity name to check"),
+        workspace: str = Depends(validated_workspace),
     ):
         """
         Check if an entity with the given name exists in the knowledge graph
 
         Args:
             name (str): Name of the entity to check
+            workspace: Workspace identifier from LIGHTRAG-WORKSPACE header
 
         Returns:
             Dict[str, bool]: Dictionary with 'exists' key indicating if entity exists
         """
         try:
-            exists = await rag.chunk_entity_relation_graph.has_node(name)
+            # Use workspace-specific graph storage
+            effective_workspace = workspace or rag.workspace
+            # Workspace is already validated by dependency
+            await rag.initialize_storages(workspace=workspace, require_existing=True)
+            storages = rag._get_storages_for_workspace(workspace, require_existing=True)
+            graph_storage = storages.get("chunk_entity_relation_graph")
+            
+            if not graph_storage:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Graph storage not available for workspace: {effective_workspace}"
+                )
+            
+            exists = await graph_storage.has_node(name)
             return {"exists": exists}
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error checking entity existence for '{name}': {str(e)}")
             logger.error(traceback.format_exc())

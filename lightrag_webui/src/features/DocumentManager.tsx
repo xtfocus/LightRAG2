@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSettingsStore } from '@/stores/settings'
+import { useWorkspaceStore } from '@/stores/workspace'
 import Button from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import {
@@ -227,6 +228,7 @@ export default function DocumentManager() {
   const [docs, setDocs] = useState<DocsStatusesResponse | null>(null)
 
   const currentTab = useSettingsStore.use.currentTab()
+  const currentWorkspace = useWorkspaceStore.use.currentWorkspace()
   const showFileName = useSettingsStore.use.showFileName()
   const setShowFileName = useSettingsStore.use.setShowFileName()
   const documentsPageSize = useSettingsStore.use.documentsPageSize()
@@ -1104,6 +1106,7 @@ export default function DocumentManager() {
     }
   }, [
     currentTab,
+    currentWorkspace, // Refresh when workspace changes
     pagination.page,
     pagination.page_size,
     statusFilter,
