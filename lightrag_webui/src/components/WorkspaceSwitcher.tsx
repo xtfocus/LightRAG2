@@ -42,11 +42,7 @@ export default function WorkspaceSwitcher() {
   }, [currentWorkspace, refreshWorkspaceInfo])
 
   const handleWorkspaceChange = (value: string) => {
-    if (value === '__default__') {
-      setCurrentWorkspace(null)
-    } else {
-      setCurrentWorkspace(value)
-    }
+    setCurrentWorkspace(value)
     setIsOpen(false)
   }
 
@@ -61,8 +57,8 @@ export default function WorkspaceSwitcher() {
     }
   }
 
-  const displayValue = currentWorkspace || t('workspace.default', 'Default')
-  const selectValue = currentWorkspace || '__default__'
+  const displayValue = currentWorkspace || t('workspace.select', 'Select workspace')
+  const selectValue = currentWorkspace || ''
 
   return (
     <div className="flex items-center gap-2" data-testid="workspace-switcher">
@@ -81,9 +77,6 @@ export default function WorkspaceSwitcher() {
           </div>
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="__default__">
-            {t('workspace.default', 'Default')}
-          </SelectItem>
           {isLoadingWorkspaces ? (
             <SelectItem value="__loading__" disabled>
               {t('workspace.loading', 'Loading...')}

@@ -2438,6 +2438,13 @@ async def merge_nodes_and_edges(
         total_files: Total files for logging
         file_path: File path for logging
     """
+    # TIMING: Start merge operation
+    merge_start_time = time.perf_counter()
+    workspace = getattr(llm_response_cache, 'workspace', None) if llm_response_cache else None
+    logger.info(
+        f"[TIMING] [workspace={workspace}] Merge operation started: "
+        f"doc_id={doc_id}, chunk_results={len(chunk_results)}"
+    )
 
     # Check for cancellation at the start of merge
     if pipeline_status is not None and pipeline_status_lock is not None:
@@ -2760,9 +2767,18 @@ async def merge_nodes_and_edges(
 
     log_message = f"Completed merging: {len(processed_entities)} entities, {len(all_added_entities)} extra entities, {len(processed_edges)} relations"
     logger.info(log_message)
-    async with pipeline_status_lock:
-        pipeline_status["latest_message"] = log_message
-        pipeline_status["history_messages"].append(log_message)
+    if pipeline_status is not None and pipeline_status_lock is not None:
+        async with pipeline_status_lock:
+            pipeline_status["latest_message"] = log_message
+            pipeline_status["history_messages"].append(log_message)
+    
+    # TIMING: End merge operation
+    merge_duration = time.perf_counter() - merge_start_time
+    logger.info(
+        f"[TIMING] [workspace={workspace}] Merge operation completed: "
+        f"duration={merge_duration:.3f}s, doc_id={doc_id}, "
+        f"entities={len(processed_entities)}, relations={len(processed_edges)}"
+    )
 
 
 async def extract_entities(
@@ -2773,6 +2789,14 @@ async def extract_entities(
     llm_response_cache: BaseKVStorage | None = None,
     text_chunks_storage: BaseKVStorage | None = None,
 ) -> list:
+    # TIMING: Start entity extraction
+    extract_start_time = time.perf_counter()
+    workspace = getattr(llm_response_cache, 'workspace', None) if llm_response_cache else None
+    logger.info(
+        f"[TIMING] [workspace={workspace}] Entity extraction started: "
+        f"chunks={len(chunks)}"
+    )
+    
     # Check for cancellation at the start of entity extraction
     if pipeline_status is not None and pipeline_status_lock is not None:
         async with pipeline_status_lock:
@@ -2781,6 +2805,14 @@ async def extract_entities(
                     "User cancelled during entity extraction"
                 )
 
+    # TIMING: Start entity extraction
+    extract_start_time = time.perf_counter()
+    workspace = getattr(llm_response_cache, 'workspace', None) if llm_response_cache else None
+    logger.info(
+        f"[TIMING] [workspace={workspace}] Entity extraction started: "
+        f"chunks={len(chunks)}"
+    )
+    
     use_llm_func: callable = global_config["llm_model_func"]
     entity_extract_max_gleaning = global_config["entity_extract_max_gleaning"]
 
@@ -3006,6 +3038,13 @@ async def extract_entities(
         raise prefixed_exception from first_exception
 
     # If all tasks completed successfully, chunk_results already contains the results
+    # TIMING: End entity extraction
+    extract_duration = time.perf_counter() - extract_start_time
+    logger.info(
+        f"[TIMING] [workspace={workspace}] Entity extraction completed: "
+        f"duration={extract_duration:.3f}s, chunks={len(chunks)}, "
+        f"results={len(chunk_results)}"
+    )
     # Return the chunk_results for later processing in merge_nodes_and_edges
     return chunk_results
 
