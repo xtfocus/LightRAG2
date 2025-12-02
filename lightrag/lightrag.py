@@ -783,6 +783,12 @@ class LightRAG:
         if require_existing and effective_workspace:
             effective_workspace = await self._validate_workspace_exists(effective_workspace)
         
+        # Always initialize pipeline_status for the workspace (workspace-specific, not instance-specific)
+        # This is idempotent - safe to call multiple times for the same workspace
+        if effective_workspace:
+            from lightrag.kg.shared_storage import initialize_pipeline_status
+            await initialize_pipeline_status(workspace=effective_workspace)
+        
         if self._storages_status == StoragesStatus.CREATED:
             # Set the first initialized workspace will set the default workspace
             # Allows namespace operation without specifying workspace for backward compatibility
@@ -794,11 +800,6 @@ class LightRAG:
                     f"Creating LightRAG instance with workspace='{effective_workspace}' "
                     f"while default workspace is set to '{default_workspace}'"
                 )
-
-            # Auto-initialize pipeline_status for this workspace
-            if effective_workspace:
-                from lightrag.kg.shared_storage import initialize_pipeline_status
-                await initialize_pipeline_status(workspace=effective_workspace)
 
             # Initialize storages for the workspace
             if effective_workspace:
@@ -4389,12 +4390,11 @@ class LightRAG:
         
         # Use doc_status.get_docs_paginated if available
         try:
-            from lightrag.kg.doc_status import DocStatus as DocStatusEnum
-            
+            # DocStatus is already imported from lightrag.base at the top of the file
             status_enum = None
             if status_filter:
                 try:
-                    status_enum = DocStatusEnum(status_filter.upper())
+                    status_enum = DocStatus(status_filter.upper())
                 except ValueError:
                     logger.warning(f"Invalid status filter: {status_filter}")
             
@@ -4547,11 +4547,11 @@ class LightRAG:
             
             # Get all documents by querying each status
             try:
-                from lightrag.kg.doc_status import DocStatus as DocStatusEnum
+                # DocStatus is already imported from lightrag.base at the top of the file
                 all_doc_ids = set()
                 
                 # Get documents from each status
-                for status in DocStatusEnum:
+                for status in DocStatus:
                     try:
                         docs = await doc_status.get_docs_by_status(status)
                         all_doc_ids.update(docs.keys())

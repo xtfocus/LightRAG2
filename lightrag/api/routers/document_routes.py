@@ -2124,6 +2124,10 @@ def create_document_routes(
             storages = rag._get_storages_for_workspace(workspace, require_existing=True)
             doc_status_storage = storages.get("doc_status")
             
+            # Ensure storage is initialized (this sets _storage_lock)
+            if doc_status_storage and (not hasattr(doc_status_storage, '_storage_lock') or doc_status_storage._storage_lock is None):
+                await doc_status_storage.initialize()
+            
             # Sanitize filename to prevent Path Traversal attacks
             safe_filename = sanitize_filename(file.filename, doc_manager.input_dir)
 
