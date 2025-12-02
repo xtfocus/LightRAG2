@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import traceback
 import asyncio
-import configparser
 import inspect
 import os
 import time
@@ -120,9 +119,6 @@ from dotenv import load_dotenv
 # the OS environment variables take precedence over the .env file
 load_dotenv(dotenv_path=".env", override=False)
 
-# TODO: TO REMOVE @Yannick
-config = configparser.ConfigParser()
-config.read("config.ini", "utf-8")
 
 
 @final
@@ -4572,6 +4568,100 @@ class LightRAG:
                 deletion_results["details"]["documents_deleted"] = deleted_count
             except Exception as e:
                 deletion_results["errors"].append(f"Failed to get documents: {e}")
+            
+            # Clean up all storage instances using drop() method (similar to clear_documents)
+            try:
+                drop_tasks = []
+                workspace_storages = [
+                    storages.get("text_chunks"),
+                    storages.get("full_docs"),
+                    storages.get("full_entities"),
+                    storages.get("full_relations"),
+                    storages.get("entity_chunks"),
+                    storages.get("relation_chunks"),
+                    storages.get("entities_vdb"),
+                    storages.get("relationships_vdb"),
+                    storages.get("chunks_vdb"),
+                    storages.get("chunk_entity_relation_graph"),
+                    storages.get("doc_status"),
+                ]
+                
+                for storage in workspace_storages:
+                    if storage is not None and hasattr(storage, 'drop'):
+                        drop_tasks.append(storage.drop())
+                
+                # Wait for all drop tasks to complete
+                if drop_tasks:
+                    drop_results = await asyncio.gather(*drop_tasks, return_exceptions=True)
+                    
+                    # Check for errors and log results
+                    storage_success_count = 0
+                    storage_error_count = 0
+                    
+                    for i, result in enumerate(drop_results):
+                        storage_name = workspace_storages[i].__class__.__name__ if workspace_storages[i] else "Unknown"
+                        if isinstance(result, Exception):
+                            error_msg = f"Error dropping {storage_name}: {str(result)}"
+                            deletion_results["errors"].append(error_msg)
+                            logger.warning(f"[{workspace}] {error_msg}")
+                            storage_error_count += 1
+                        else:
+                            logger.info(f"[{workspace}] Successfully dropped {storage_name}")
+                            storage_success_count += 1
+                    
+                    deletion_results["details"]["storage_cleanup"] = {
+                        "success_count": storage_success_count,
+                        "error_count": storage_error_count,
+                    }
+            except Exception as e:
+                deletion_results["errors"].append(f"Failed to cleanup storages: {e}")
+                logger.warning(f"[{workspace}] Storage cleanup error: {e}")
+            
+            # Delete workspace directory for file-based storage backends
+            try:
+                import shutil
+                
+                # Determine if we're using file-based storage
+                is_file_based = (
+                    self.kv_storage in ["JsonKVStorage", "JsonDocStatusStorage"] or
+                    self.graph_storage == "NetworkXStorage" or
+                    self.vector_storage in ["NanoVectorDBStorage", "FaissVectorDBStorage"]
+                )
+                
+                if is_file_based and workspace:
+                    workspace_dir = os.path.join(self.working_dir, workspace)
+                    
+                    if os.path.exists(workspace_dir) and os.path.isdir(workspace_dir):
+                        try:
+                            # Check if directory is empty or only contains expected workspace files
+                            # (safety check to avoid deleting wrong directories)
+                            dir_contents = os.listdir(workspace_dir)
+                            expected_prefixes = ['kv_store_', 'graph_', 'vector_', 'doc_status_']
+                            
+                            # Only delete if directory contains only workspace files or is empty
+                            if not dir_contents or all(
+                                any(item.startswith(prefix) for prefix in expected_prefixes)
+                                for item in dir_contents
+                            ):
+                                shutil.rmtree(workspace_dir)
+                                logger.info(f"[{workspace}] Deleted workspace directory: {workspace_dir}")
+                                deletion_results["details"]["directory_deleted"] = True
+                            else:
+                                logger.warning(
+                                    f"[{workspace}] Workspace directory contains unexpected files, "
+                                    f"skipping deletion: {workspace_dir}"
+                                )
+                                deletion_results["details"]["directory_deleted"] = False
+                                deletion_results["errors"].append(
+                                    f"Workspace directory contains unexpected files, not deleted"
+                                )
+                        except Exception as e:
+                            error_msg = f"Failed to delete workspace directory: {e}"
+                            deletion_results["errors"].append(error_msg)
+                            logger.error(f"[{workspace}] {error_msg}")
+            except Exception as e:
+                deletion_results["errors"].append(f"Failed to cleanup workspace directory: {e}")
+                logger.warning(f"[{workspace}] Directory cleanup error: {e}")
             
             # Clear pipeline status
             try:
