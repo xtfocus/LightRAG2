@@ -2862,10 +2862,42 @@ class LightRAG:
         effective_workspace = await self._validate_workspace_exists(workspace)
         
         # Ensure storages are initialized
-        await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+        try:
+            await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+        except Exception as e:
+            logger.warning(
+                f"[{effective_workspace}] Failed to initialize storages via initialize_storages(): {e}. "
+                "Will attempt individual storage initialization as fallback."
+            )
         
         # Get workspace-specific storages
         storages = self._get_storages_for_workspace(effective_workspace, require_existing=True)
+        
+        # After initialization, explicitly ensure each storage is initialized
+        # This is a safety net in case initialize_storages() didn't fully complete
+        # Different storage types use different initialization indicators:
+        # - KV/Graph storages: _storage_lock
+        # - Vector DB storages (Qdrant/Milvus): _initialized flag or _client
+        for storage_name, storage in storages.items():
+            if storage is not None and hasattr(storage, 'initialize'):
+                try:
+                    # Check if storage needs initialization
+                    needs_init = False
+                    if hasattr(storage, '_storage_lock') and storage._storage_lock is None:
+                        needs_init = True
+                    elif hasattr(storage, '_initialized') and not storage._initialized:
+                        needs_init = True
+                    elif hasattr(storage, '_client') and storage._client is None:
+                        needs_init = True
+                    
+                    if needs_init:
+                        await storage.initialize()
+                except Exception as e:
+                    logger.warning(
+                        f"[{effective_workspace}] Failed to initialize {storage_name} before query: {e}. "
+                        "Query may fail if this storage is required."
+                    )
+        
         chunk_entity_relation_graph = storages["chunk_entity_relation_graph"]
         entities_vdb = storages["entities_vdb"]
         relationships_vdb = storages["relationships_vdb"]
@@ -2995,10 +3027,42 @@ class LightRAG:
         effective_workspace = await self._validate_workspace_exists(workspace)
         
         # Ensure storages are initialized
-        await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+        try:
+            await self.initialize_storages(workspace=effective_workspace, require_existing=True)
+        except Exception as e:
+            logger.warning(
+                f"[{effective_workspace}] Failed to initialize storages via initialize_storages(): {e}. "
+                "Will attempt individual storage initialization as fallback."
+            )
         
         # Get workspace-specific storages
         storages = self._get_storages_for_workspace(effective_workspace, require_existing=True)
+        
+        # After initialization, explicitly ensure each storage is initialized
+        # This is a safety net in case initialize_storages() didn't fully complete
+        # Different storage types use different initialization indicators:
+        # - KV/Graph storages: _storage_lock
+        # - Vector DB storages (Qdrant/Milvus): _initialized flag or _client
+        for storage_name, storage in storages.items():
+            if storage is not None and hasattr(storage, 'initialize'):
+                try:
+                    # Check if storage needs initialization
+                    needs_init = False
+                    if hasattr(storage, '_storage_lock') and storage._storage_lock is None:
+                        needs_init = True
+                    elif hasattr(storage, '_initialized') and not storage._initialized:
+                        needs_init = True
+                    elif hasattr(storage, '_client') and storage._client is None:
+                        needs_init = True
+                    
+                    if needs_init:
+                        await storage.initialize()
+                except Exception as e:
+                    logger.warning(
+                        f"[{effective_workspace}] Failed to initialize {storage_name} before query: {e}. "
+                        "Query may fail if this storage is required."
+                    )
+        
         chunk_entity_relation_graph = storages["chunk_entity_relation_graph"]
         entities_vdb = storages["entities_vdb"]
         relationships_vdb = storages["relationships_vdb"]
@@ -4530,6 +4594,42 @@ class LightRAG:
         # Get workspace-specific storages
         storages = self._get_storages_for_workspace(workspace, require_existing=True)
         
+        # Ensure storages are initialized before attempting cleanup
+        # This is the same pattern used in get_workspace_info() at line 4254
+        # Needed because storages may not be initialized if workspace was created but never used
+        try:
+            await self.initialize_storages(workspace=workspace, require_existing=True)
+        except Exception as e:
+            logger.warning(
+                f"[{workspace}] Failed to initialize storages via initialize_storages(): {e}. "
+                "Will attempt individual storage initialization as fallback."
+            )
+        
+        # After initialization, explicitly ensure each storage is initialized
+        # This is a safety net in case initialize_storages() didn't fully complete
+        # Different storage types use different initialization indicators:
+        # - KV/Graph storages: _storage_lock
+        # - Vector DB storages (Qdrant/Milvus): _initialized flag or _client
+        for storage_name, storage in storages.items():
+            if storage is not None and hasattr(storage, 'initialize'):
+                try:
+                    # Check if storage needs initialization
+                    needs_init = False
+                    if hasattr(storage, '_storage_lock') and storage._storage_lock is None:
+                        needs_init = True
+                    elif hasattr(storage, '_initialized') and not storage._initialized:
+                        needs_init = True
+                    elif hasattr(storage, '_client') and storage._client is None:
+                        needs_init = True
+                    
+                    if needs_init:
+                        await storage.initialize()
+                except Exception as e:
+                    logger.warning(
+                        f"[{workspace}] Failed to initialize {storage_name} before deletion: {e}. "
+                        "This storage may not be usable."
+                    )
+        
         deletion_results = {
             "workspace": workspace,
             "deleted": False,
@@ -4539,56 +4639,97 @@ class LightRAG:
         
         try:
             # Delete all documents (this will cascade to chunks, entities, relations)
-            doc_status = storages["doc_status"]
+            doc_status = storages.get("doc_status")
             
             # Get all documents by querying each status
-            try:
-                # DocStatus is already imported from lightrag.base at the top of the file
-                all_doc_ids = set()
-                
-                # Get documents from each status
-                for status in DocStatus:
-                    try:
-                        docs = await doc_status.get_docs_by_status(status)
-                        all_doc_ids.update(docs.keys())
-                    except Exception as e:
-                        logger.warning(f"Failed to get documents with status {status}: {e}")
-                
-                doc_ids = list(all_doc_ids)
-                
-                # Delete each document
-                deleted_count = 0
-                for doc_id in doc_ids:
-                    try:
-                        await self.adelete_by_doc_id(doc_id, workspace=workspace)
-                        deleted_count += 1
-                    except Exception as e:
-                        deletion_results["errors"].append(f"Failed to delete document {doc_id}: {e}")
-                
-                deletion_results["details"]["documents_deleted"] = deleted_count
-            except Exception as e:
-                deletion_results["errors"].append(f"Failed to get documents: {e}")
+            # Only attempt if doc_status exists and is properly initialized
+            if doc_status is not None:
+                try:
+                    # DocStatus is already imported from lightrag.base at the top of the file
+                    all_doc_ids = set()
+                    
+                    # Check if doc_status is initialized (has _storage_lock)
+                    is_initialized = hasattr(doc_status, '_storage_lock') and doc_status._storage_lock is not None
+                    
+                    if is_initialized:
+                        # Get documents from each status
+                        for status in DocStatus:
+                            try:
+                                docs = await doc_status.get_docs_by_status(status)
+                                all_doc_ids.update(docs.keys())
+                            except Exception as e:
+                                logger.warning(f"Failed to get documents with status {status}: {e}")
+                        
+                        doc_ids = list(all_doc_ids)
+                        
+                        # Delete each document
+                        deleted_count = 0
+                        for doc_id in doc_ids:
+                            try:
+                                await self.adelete_by_doc_id(doc_id, workspace=workspace)
+                                deleted_count += 1
+                            except Exception as e:
+                                deletion_results["errors"].append(f"Failed to delete document {doc_id}: {e}")
+                        
+                        deletion_results["details"]["documents_deleted"] = deleted_count
+                    else:
+                        logger.warning(f"[{workspace}] doc_status storage not initialized, skipping document deletion")
+                        deletion_results["details"]["documents_deleted"] = 0
+                except Exception as e:
+                    deletion_results["errors"].append(f"Failed to get documents: {e}")
+            else:
+                logger.warning(f"[{workspace}] doc_status storage is None, skipping document deletion")
+                deletion_results["details"]["documents_deleted"] = 0
             
             # Clean up all storage instances using drop() method (similar to clear_documents)
             try:
                 drop_tasks = []
+                storage_names = []
                 workspace_storages = [
-                    storages.get("text_chunks"),
-                    storages.get("full_docs"),
-                    storages.get("full_entities"),
-                    storages.get("full_relations"),
-                    storages.get("entity_chunks"),
-                    storages.get("relation_chunks"),
-                    storages.get("entities_vdb"),
-                    storages.get("relationships_vdb"),
-                    storages.get("chunks_vdb"),
-                    storages.get("chunk_entity_relation_graph"),
-                    storages.get("doc_status"),
+                    ("text_chunks", storages.get("text_chunks")),
+                    ("full_docs", storages.get("full_docs")),
+                    ("full_entities", storages.get("full_entities")),
+                    ("full_relations", storages.get("full_relations")),
+                    ("entity_chunks", storages.get("entity_chunks")),
+                    ("relation_chunks", storages.get("relation_chunks")),
+                    ("entities_vdb", storages.get("entities_vdb")),
+                    ("relationships_vdb", storages.get("relationships_vdb")),
+                    ("chunks_vdb", storages.get("chunks_vdb")),
+                    ("chunk_entity_relation_graph", storages.get("chunk_entity_relation_graph")),
+                    ("doc_status", storages.get("doc_status")),
                 ]
                 
-                for storage in workspace_storages:
+                for storage_name, storage in workspace_storages:
                     if storage is not None and hasattr(storage, 'drop'):
-                        drop_tasks.append(storage.drop())
+                        # Check if storage is initialized before calling drop()
+                        # Different storage types use different initialization indicators:
+                        # - KV/Graph storages: _storage_lock
+                        # - Vector DB storages (Qdrant/Milvus): _initialized flag or _client
+                        is_initialized = None  # None = unknown, will determine below
+                        
+                        # Check for _storage_lock (used by KV/Graph storages like JsonKVStorage)
+                        if hasattr(storage, '_storage_lock'):
+                            is_initialized = storage._storage_lock is not None
+                        # Check for _initialized flag (used by Qdrant/Milvus vector DB)
+                        elif hasattr(storage, '_initialized'):
+                            is_initialized = storage._initialized is True
+                        # Check for _client (used by vector DB storages that need a client like Qdrant)
+                        elif hasattr(storage, '_client'):
+                            is_initialized = storage._client is not None
+                        # If we don't recognize the initialization pattern, assume initialized
+                        # (some storage types might not require explicit initialization)
+                        else:
+                            is_initialized = True
+                            logger.debug(
+                                f"[{workspace}] Storage {storage_name} has unknown initialization pattern, "
+                                "assuming initialized"
+                            )
+                        
+                        if is_initialized:
+                            drop_tasks.append(storage.drop())
+                            storage_names.append(storage_name)
+                        else:
+                            logger.debug(f"[{workspace}] Skipping drop() for {storage_name} (not initialized)")
                 
                 # Wait for all drop tasks to complete
                 if drop_tasks:
@@ -4599,7 +4740,7 @@ class LightRAG:
                     storage_error_count = 0
                     
                     for i, result in enumerate(drop_results):
-                        storage_name = workspace_storages[i].__class__.__name__ if workspace_storages[i] else "Unknown"
+                        storage_name = storage_names[i]
                         if isinstance(result, Exception):
                             error_msg = f"Error dropping {storage_name}: {str(result)}"
                             deletion_results["errors"].append(error_msg)
@@ -4612,6 +4753,12 @@ class LightRAG:
                     deletion_results["details"]["storage_cleanup"] = {
                         "success_count": storage_success_count,
                         "error_count": storage_error_count,
+                    }
+                else:
+                    logger.info(f"[{workspace}] No storages to drop (all None or uninitialized)")
+                    deletion_results["details"]["storage_cleanup"] = {
+                        "success_count": 0,
+                        "error_count": 0,
                     }
             except Exception as e:
                 deletion_results["errors"].append(f"Failed to cleanup storages: {e}")

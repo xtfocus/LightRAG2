@@ -2927,7 +2927,10 @@ def create_document_routes(
         response_model=TrackStatusResponse,
         dependencies=[Depends(combined_auth)],
     )
-    async def get_track_status(track_id: str) -> TrackStatusResponse:
+    async def get_track_status(
+        track_id: str,
+        workspace: str = Depends(validated_workspace),
+    ) -> TrackStatusResponse:
         """
         Get the processing status of documents by tracking ID.
 
@@ -2936,6 +2939,7 @@ def create_document_routes(
 
         Args:
             track_id (str): The tracking ID returned from upload, text, or texts endpoints
+            workspace: Validated workspace identifier (from dependency)
 
         Returns:
             TrackStatusResponse: A response object containing:
@@ -2953,8 +2957,26 @@ def create_document_routes(
 
             track_id = track_id.strip()
 
-            # Get documents by track_id
-            docs_by_track_id = await rag.aget_docs_by_track_id(track_id)
+            # Workspace is already validated by dependency
+            # Ensure storages are initialized
+            await rag.initialize_storages(workspace=workspace, require_existing=True)
+            
+            # Get workspace-specific storage first
+            storages = rag._get_storages_for_workspace(workspace, require_existing=True)
+            doc_status_storage = storages.get("doc_status")
+            
+            if not doc_status_storage:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to get document status storage for workspace: {workspace}"
+                )
+            
+            # Ensure storage is initialized (this sets _storage_lock)
+            if not hasattr(doc_status_storage, '_storage_lock') or doc_status_storage._storage_lock is None:
+                await doc_status_storage.initialize()
+            
+            # Get documents by track_id using workspace-specific storage
+            docs_by_track_id = await doc_status_storage.get_docs_by_track_id(track_id)
 
             # Convert to response format
             documents = []
