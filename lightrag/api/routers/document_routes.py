@@ -1658,7 +1658,10 @@ async def pipeline_index_file(rag: LightRAG, file_path: Path, track_id: str = No
             await rag.apipeline_process_enqueue_documents(workspace=workspace)
 
     except Exception as e:
-        logger.error(f"Error indexing file {file_path.name}: {str(e)}")
+        logger.error(
+            f"Error indexing file {file_path.name} (workspace: {workspace}, "
+            f"track_id: {track_id}): {str(e)}"
+        )
         logger.error(traceback.format_exc())
 
 

@@ -1502,11 +1502,13 @@ class LightRAG:
             for doc_id in ignored_ids:
                 file_path = new_docs.get(doc_id, {}).get("file_path", "unknown_source")
                 logger.warning(
-                    f"Ignoring document ID (already exists): {doc_id} ({file_path})"
+                    f"[Workspace: {effective_workspace}] Ignoring document ID (already exists): "
+                    f"{doc_id} ({file_path})"
                 )
             if len(ignored_ids) > 3:
                 logger.warning(
-                    f"Total Ignoring {len(ignored_ids)} document IDs that already exist in storage"
+                    f"[Workspace: {effective_workspace}] Total Ignoring {len(ignored_ids)} "
+                    f"document IDs that already exist in storage"
                 )
 
         # Filter new_docs to only include documents with unique IDs
@@ -1517,8 +1519,11 @@ class LightRAG:
         }
 
         if not new_docs:
-            logger.warning("No new unique documents were found.")
-            return
+            logger.warning(
+                f"[Workspace: {effective_workspace}] No new unique documents were found "
+                f"(track_id: {track_id}). All {len(all_new_doc_ids)} documents were duplicates."
+            )
+            return track_id
 
         # 4. Store document content in full_docs and status in doc_status
         #    Ensure storages are initialized before use
@@ -1536,12 +1541,25 @@ class LightRAG:
             for doc_id in new_docs.keys()
         }
         await full_docs.upsert(full_docs_data)
-        # Persist data to disk immediately
-        await full_docs.index_done_callback()
+        # Note: For JSON storage, persistence happens in upsert() via index_done_callback()
+        # We avoid calling it again here to prevent blocking concurrent enqueues
+        # For other storage backends (Redis, MongoDB, PostgreSQL), persistence is automatic
+        # Only call index_done_callback for non-JSON backends that need explicit persistence
+        if hasattr(full_docs, 'index_done_callback'):
+            # Check if this is JSON storage (has _storage_lock) - if so, skip to avoid double-call
+            if not (hasattr(full_docs, '_storage_lock') and full_docs._storage_lock is not None):
+                await full_docs.index_done_callback()
 
         # Store document status (without content)
+        # Note: upsert() for JSON storage already calls index_done_callback() internally
+        # This uses a lock, so concurrent enqueues will serialize here, but that's necessary
+        # for data integrity
         await doc_status.upsert(new_docs)
-        logger.debug(f"Stored {len(new_docs)} new unique documents in workspace '{effective_workspace}'")
+        
+        logger.info(
+            f"Stored {len(new_docs)} new unique documents with status PENDING "
+            f"(track_id: {track_id})"
+        )
 
         return track_id
 
@@ -1854,6 +1872,7 @@ class LightRAG:
                     doc_status.get_docs_by_status(DocStatus.FAILED),
                     doc_status.get_docs_by_status(DocStatus.PENDING),
                 )
+
 
                 to_process_docs: dict[str, DocProcessingStatus] = {}
                 to_process_docs.update(processing_docs)
@@ -2401,12 +2420,43 @@ class LightRAG:
                 pipeline_status["latest_message"] = log_message
                 pipeline_status["history_messages"].append(log_message)
 
-                # Check for pending documents again
-                processing_docs, failed_docs, pending_docs = await asyncio.gather(
-                    self.doc_status.get_docs_by_status(DocStatus.PROCESSING),
-                    self.doc_status.get_docs_by_status(DocStatus.FAILED),
-                    self.doc_status.get_docs_by_status(DocStatus.PENDING),
-                )
+                # Retry mechanism with exponential backoff to find newly enqueued documents
+                # This handles race conditions when multiple files are uploaded simultaneously
+                max_retries = 3
+                retry_delay = 0.2  # Start with 200ms
+                found_new_docs = False
+                processing_docs = {}
+                failed_docs = {}
+                pending_docs = {}
+                
+                for retry in range(max_retries):
+                    # Small delay to allow in-flight enqueue operations to complete
+                    if retry > 0:
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff: 0.2s, 0.4s, 0.8s
+
+                    # Check for pending documents again
+                    # Use workspace-specific storages for the re-check
+                    processing_docs, failed_docs, pending_docs = await asyncio.gather(
+                        doc_status.get_docs_by_status(DocStatus.PROCESSING),
+                        doc_status.get_docs_by_status(DocStatus.FAILED),
+                        doc_status.get_docs_by_status(DocStatus.PENDING),
+                    )
+                    
+                    # Check if we found any new documents
+                    total_docs = len(processing_docs) + len(failed_docs) + len(pending_docs)
+                    if total_docs > 0:
+                        found_new_docs = True
+                        break
+                
+                if not found_new_docs:
+                    logger.warning(
+                        f"No documents found after {max_retries} retries with exponential backoff. "
+                        f"This may indicate all documents were already processed or "
+                        f"there was an enqueue failure."
+                    )
+                    # Break the main loop since there are no documents to process
+                    break
 
                 to_process_docs = {}
                 to_process_docs.update(processing_docs)
